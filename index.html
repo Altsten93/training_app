@@ -75,12 +75,11 @@
 
     <script>
         // --- ONE-TIME SETUP ---
-        // Paste your 3 published Google Sheet .csv URLs here.
-        // This is the only place you need to edit.
+        // URLs have been updated to your specific sheets.
         const CONFIG = {
-            chest: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR-fso848aaa0S_W2a5Ff2em7a2Q5A6O0z3a4e8d-8c7c2b6a1f1e_9e7e5d4c3b2a1/pub?gid=0&single=true&output=csv", // REPLACE WITH YOUR CHEST/TRICEPS URL
-            back: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR-fso848aaa0S_W2a5Ff2em7a2Q5A6O0z3a4e8d-8c7c2b6a1f1e_9e7e5d4c3b2a1/pub?gid=123456789&single=true&output=csv", // REPLACE WITH YOUR BACK/BICEPS URL
-            legs: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR-fso848aaa0S_W2a5Ff2em7a2Q5A6O0z3a4e8d-8c7c2b6a1f1e_9e7e5d4c3b2a1/pub?gid=987654321&single=true&output=csv"  // REPLACE WITH YOUR LEGS URL
+            chest: "https://docs.google.com/spreadsheets/d/1M-xwzk-sFHJPYAcDRkVe17vd7sg_U_jO8D5QhW8RYB0/pub?gid=1317122870&single=true&output=csv",
+            back: "https://docs.google.com/spreadsheets/d/1M-xwzk-sFHJPYAcDRkVe17vd7sg_U_jO8D5QhW8RYB0/pub?gid=0&single=true&output=csv",
+            legs: "https://docs.google.com/spreadsheets/d/1M-xwzk-sFHJPYAcDRkVe17vd7sg_U_jO8D5QhW8RYB0/pub?gid=1972507766&single=true&output=csv"
         };
 
         // DOM Elements
@@ -111,12 +110,6 @@
          * Main function to fetch data on page load.
          */
         async function handleFetchData() {
-            // Check if placeholder URLs are still there
-            if (CONFIG.chest.includes("2PACX-1vR-fso848aaa0S")) {
-                showError("Please update the placeholder URLs in the script with your own Google Sheet URLs.");
-                return;
-            }
-
             try {
                 const [chestData, backData, legsData] = await Promise.all([
                     fetchSheet(CONFIG.chest, 'Chest & Triceps'),
@@ -139,7 +132,6 @@
         }
         
         async function fetchSheet(url, type) {
-            // ... (rest of the function is identical, no changes needed)
             const response = await fetch(url);
             if (!response.ok) throw new Error(`Failed to fetch ${type} sheet.`);
             const text = await response.text();
@@ -182,7 +174,7 @@
             
             container.innerHTML = `
                 <h2 class="text-2xl font-bold text-center text-blue-300">Next Up: ${nextWorkout.workoutType}</h2>
-                <p class="text-center text-gray-400 mb-6">${workoutDate.toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                <p class="text-center text-gray-400 mb-6">${workoutDate.toLocaleString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             `;
 
             const exercises = [];
@@ -220,7 +212,6 @@
         }
 
         function prepareDashboard() {
-            // ... (rest of the function is identical, no changes needed)
             const completed = allWorkoutsData.filter(w => w['Träning_klar{Ja / Nej}']?.toLowerCase() === 'ja' && w.Datum);
 
             const weeklyVolume = {}; 
@@ -247,7 +238,6 @@
         }
         
         function renderChart(labels, data) {
-            // ... (rest of the function is identical, no changes needed)
             const ctx = document.getElementById('volume-chart').getContext('2d');
             if (chartInstance) {
                 chartInstance.destroy();
@@ -275,7 +265,6 @@
         }
         
         function getWeekNumber(d) {
-            // ... (rest of the function is identical, no changes needed)
             d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
             d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
             const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
