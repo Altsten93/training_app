@@ -111,9 +111,6 @@
             document.getElementById(viewId).classList.add('active');
         }
 
-        /**
-         * Main function to fetch data on page load.
-         */
         async function handleFetchData() {
             try {
                 const [chestData, backData, legsData] = await Promise.all([
@@ -122,13 +119,15 @@
                     fetchSheet(CONFIG.legs, 'Legs')
                 ]);
 
-                allWorkoutsData = [...chestData, ...backData, ...legsData];
+                allWorkoutsData = [...chestData, ...backData, ...legsData]; // Keep for dashboard
                 
-                // Prepare both views' content in the background
-                displayNextWorkout();
+                const workoutGroups = [chestData, backData, legsData];
+                const nextWorkout = findNextWorkout(workoutGroups);
+
+                displayNextWorkout(nextWorkout);
                 prepareDashboard();
                 
-                switchView('home-view'); // Show home screen on success
+                switchView('home-view');
 
             } catch (error) {
                 console.error("Fetch Error:", error);
@@ -160,19 +159,26 @@
             return data;
         }
 
-        function displayNextWorkout() {
-            const incompleteWorkouts = allWorkoutsData
-                .filter(w => w['Träning_klar{Ja / Nej}']?.toLowerCase() === 'nej' && w.Datum)
-                .sort((a, b) => new Date(a.Datum) - new Date(b.Datum));
+        function findNextWorkout(workoutGroups) {
+            for (const group of workoutGroups) {
+                for (const workout of group) {
+                    if (workout['Träning_klar{Ja / Nej}']?.toLowerCase() !== 'ja' && workout.Datum) {
+                        return workout;
+                    }
+                }
+            }
+            return null;
+        }
 
-            workoutView.innerHTML = `<button class="back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Home</button>`; // Add back button
+        function displayNextWorkout(nextWorkout) {
+            let content = `<button class="back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Home</button>`;
 
-            if (incompleteWorkouts.length === 0) {
-                workoutView.innerHTML += `<div class="bg-gray-800 p-6 rounded-2xl text-center"><p class="text-xl font-bold text-green-400">All workouts completed!</p><p class="text-gray-400">Update your Google Sheet with new goals.</p></div>`;
+            if (!nextWorkout) {
+                content += `<div class="bg-gray-800 p-6 rounded-2xl text-center"><p class="text-xl font-bold text-green-400">All workouts completed!</p><p class="text-gray-400">Update your Google Sheet with new goals.</p></div>`;
+                workoutView.innerHTML = content;
                 return;
             }
 
-            const nextWorkout = incompleteWorkouts[0];
             const workoutDate = new Date(nextWorkout.Datum);
             const container = document.createElement('div');
             container.className = 'bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700';
@@ -211,8 +217,9 @@
             });
 
             container.appendChild(list);
+            
+            workoutView.innerHTML = content;
             workoutView.appendChild(container);
-
         }
 
         function prepareDashboard() {
