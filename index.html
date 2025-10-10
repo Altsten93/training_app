@@ -95,6 +95,11 @@
         document.getElementById('show-workout-btn').addEventListener('click', () => switchView('workout-view'));
         document.getElementById('show-stats-btn').addEventListener('click', () => switchView('dashboard-view'));
         document.querySelectorAll('.back-btn').forEach(btn => btn.addEventListener('click', () => switchView('home-view')));
+        document.body.addEventListener('click', (e) => {
+            if (e.target.closest('.back-btn')) {
+                switchView('home-view');
+            }
+        });
 
         /**
          * Switches the visible view.
@@ -207,8 +212,7 @@
 
             container.appendChild(list);
             workoutView.appendChild(container);
-            // Re-add event listener for the new back button
-            workoutView.querySelector('.back-btn').addEventListener('click', () => switchView('home-view'));
+
         }
 
         function prepareDashboard() {
