@@ -27,6 +27,8 @@ document.getElementById('show-stats-btn').addEventListener('click', () => {
     prepareDashboard();
 });
 
+document.getElementById('refresh-data-btn').addEventListener('click', handleFetchData);
+
 workoutView.addEventListener('click', (e) => {
     if (e.target.classList.contains('back-btn')) {
         switchView('home-view');
