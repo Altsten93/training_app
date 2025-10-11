@@ -25,6 +25,13 @@
 <body class="bg-gray-900 text-gray-200 min-h-screen">
     <div class="container mx-auto max-w-2xl p-4 py-8">
 
+        <div id="notification" class="hidden fixed top-5 right-5 bg-green-500 text-white p-4 rounded-lg shadow-lg flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <span id="notification-message"></span>
+        </div>
+
         <!-- View 1: Loader -->
         <div id="loader-view" class="view active text-center">
             <div class="loader mx-auto"></div>
@@ -70,249 +77,17 @@
                 <h2 class="text-2xl font-bold text-center text-blue-300 mb-4">Weekly Training Volume</h2>
                 <canvas id="volume-chart"></canvas>
             </div>
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
+                <h2 class="text-2xl font-bold text-center text-blue-300 mb-4">Total Sessions per Exercise</h2>
+                <canvas id="sessions-chart"></canvas>
+            </div>
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
+                <h2 class="text-2xl font-bold text-center text-blue-300 mb-4">Average Sessions per Week</h2>
+                <div id="average-sessions"></div>
+            </div>
         </div>
     </div>
 
-    <script>
-        // --- ONE-TIME SETUP ---
-        const CONFIG = {
-            chest: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=0&single=true&output=csv",
-            back: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=1317122870&single=true&output=csv",
-            legs: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=1972507766&single=true&output=csv",
-            scriptUrl: "https://script.google.com/macros/s/AKfycbygMk5VLSori47VCZf2LvW9HIJgzN93Rg4XArJ6Rc52-xY7vPUn0WYBWQhYyuFAbWS9/exec"
-        };
-
-        // DOM Elements
-        const views = document.querySelectorAll('.view');
-        const errorMessage = document.getElementById('error-message');
-        const workoutView = document.getElementById('workout-view');
-        
-        let allWorkoutsData = [];
-        let chartInstance = null;
-        let nextWorkoutData = null; // To store the workout being displayed
-
-        // --- Event Listeners ---
-        document.addEventListener('DOMContentLoaded', handleFetchData);
-        document.getElementById('show-workout-btn').addEventListener('click', () => switchView('workout-view'));
-        document.getElementById('show-stats-btn').addEventListener('click', () => switchView('dashboard-view'));
-        document.body.addEventListener('click', (e) => {
-            if (e.target.closest('.back-btn')) {
-                switchView('home-view');
-            }
-        });
-
-        function switchView(viewId) {
-            views.forEach(view => view.classList.remove('active'));
-            document.getElementById(viewId).classList.add('active');
-        }
-
-        async function handleFetchData() {
-            try {
-                const [chestData, backData, legsData] = await Promise.all([
-                    fetchSheet(CONFIG.chest, 'Chest & Triceps'),
-                    fetchSheet(CONFIG.back, 'Back & Biceps'),
-                    fetchSheet(CONFIG.legs, 'Legs')
-                ]);
-                
-                allWorkoutsData = [...chestData, ...backData, ...legsData];
-                const workoutGroups = [chestData, backData, legsData];
-                nextWorkoutData = findNextWorkout(workoutGroups);
-
-                displayNextWorkout(nextWorkoutData);
-                prepareDashboard();
-                
-                switchView('home-view');
-            } catch (error) {
-                console.error("Fetch Error:", error);
-                showError(error.message || "An unknown error occurred.");
-            }
-        }
-        
-        async function fetchSheet(url, type) {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`Failed to fetch ${type} sheet.`);
-            const text = await response.text();
-            
-            const lines = text.trim().split('\n');
-            if (lines.length < 2) return []; 
-            
-            const headers = lines[0].split(',').map(h => h.trim());
-            const data = [];
-
-            for (let i = 1; i < lines.length; i++) {
-                const values = lines[i].split(',').map(v => v.trim());
-                if (values.length === headers.length) {
-                    let row = { 
-                        workoutType: type,
-                        originalRowIndex: i + 1 // Crucial for updating the correct row
-                    };
-                    headers.forEach((header, index) => {
-                        row[header] = values[index];
-                    });
-                    data.push(row);
-                }
-            }
-            return data;
-        }
-
-        function findNextWorkout(workoutGroups) {
-            for (const group of workoutGroups) {
-                for (const workout of group) {
-                    if (workout['Completed_workout']?.toLowerCase() !== 'ja' && workout.Datum) {
-                        return workout;
-                    }
-                }
-            }
-            return null;
-        }
-
-        function displayNextWorkout(nextWorkout) {
-            let content = `<button class="back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Home</button>`;
-
-            if (!nextWorkout) {
-                content += `<div class="bg-gray-800 p-6 rounded-2xl text-center"><p class="text-xl font-bold text-green-400">All workouts completed!</p></div>`;
-                workoutView.innerHTML = content;
-                return;
-            }
-
-            const workoutDate = new Date(nextWorkout.Datum);
-            const container = document.createElement('div');
-            container.className = 'bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700';
-            
-            let exercisesHTML = '';
-            const exercises = [];
-            for (const key in nextWorkout) {
-                if (key.endsWith('_KG') && nextWorkout[key]) {
-                    const baseName = key.replace('_KG', '');
-                    exercises.push({
-                        name: baseName.replace(/_/g, ' '),
-                        kg: nextWorkout[key],
-                        reps: nextWorkout[`${baseName}_reps`] || 'N/A',
-                        sets: nextWorkout[`${baseName}_set`] || 'N/A'
-                    });
-                }
-            }
-            exercises.forEach(ex => {
-                exercisesHTML += `
-                    <div class="bg-gray-700 p-4 rounded-lg">
-                        <p class="text-lg font-semibold capitalize">${ex.name}</p>
-                        <div class="grid grid-cols-3 gap-4 text-center mt-2">
-                            <div><p class="text-xs text-gray-400">Weight</p><p class="text-xl font-bold text-orange-400">${ex.kg} kg</p></div>
-                            <div><p class="text-xs text-gray-400">Reps</p><p class="text-xl font-bold">${ex.reps}</p></div>
-                            <div><p class="text-xs text-gray-400">Sets</p><p class="text-xl font-bold">${ex.sets}</p></div>
-                        </div>
-                    </div>`;
-            });
-
-            container.innerHTML = `
-                <h2 class="text-2xl font-bold text-center text-blue-300">Next Up: ${nextWorkout.workoutType}</h2>
-                <p class="text-center text-gray-400 mb-6">${workoutDate.toLocaleString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-                <div class="space-y-3">${exercisesHTML}</div>
-                <div class="mt-8 text-center">
-                    <p class="font-semibold mb-3">Did you complete this workout today?</p>
-                    <div class="flex justify-center gap-4">
-                        <button id="complete-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Yes, I'm Done!</button>
-                        <button id="skip-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg">Skip for Now</button>
-                    </div>
-                </div>`;
-            
-            workoutView.innerHTML = content;
-            workoutView.appendChild(container);
-            
-            // Add event listeners for the new buttons
-            workoutView.querySelector('#complete-btn').addEventListener('click', markWorkoutComplete);
-            workoutView.querySelector('#skip-btn').addEventListener('click', () => alert("Skip feature coming soon!"));
-        }
-
-        async function markWorkoutComplete() {
-            const button = document.getElementById('complete-btn');
-            button.disabled = true;
-            button.textContent = 'Updating...';
-
-            const today = new Date();
-            const formattedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-            // Map workoutType to the actual sheet name as it appears in your Google Sheet
-            const sheetNameMap = {
-                'Chest & Triceps': 'Chest',
-                'Back & Biceps': 'Back',
-                'Legs': 'Legs'
-            };
-            const sheetName = sheetNameMap[nextWorkoutData.workoutType];
-
-            const payload = {
-                sheetName: sheetName,
-                rowIndex: nextWorkoutData.originalRowIndex,
-                date: formattedDate
-            };
-
-            try {
-                const response = await fetch(CONFIG.scriptUrl, {
-                    method: 'POST',
-                    mode: 'cors', // Important for cross-origin requests
-                    body: JSON.stringify(payload),
-                });
-                const result = await response.json();
-                if (result.status === 'success') {
-                    alert('Workout marked as complete! The app will now reload with the next session.');
-                    location.reload();
-                } else {
-                    throw new Error(result.message || 'The script returned an error.');
-                }
-            } catch (error) {
-                console.error("Error updating sheet:", error);
-                alert(`Failed to update sheet. Error: ${error.message}`);
-                button.disabled = false;
-                button.textContent = "Yes, I'm Done!";
-            }
-        }
-
-        function prepareDashboard() {
-            const completed = allWorkoutsData.filter(w => w['Completed_workout']?.toLowerCase() === 'ja' && w.Datum);
-            const weeklyVolume = {}; 
-            completed.forEach(workout => {
-                let totalVolume = 0;
-                for (const key in workout) {
-                    if (key.endsWith('_volym') && workout[key]) {
-                        totalVolume += parseFloat(workout[key]) || 0;
-                    }
-                }
-                if (totalVolume > 0) {
-                    const date = new Date(workout.Datum);
-                    const weekKey = `${date.getFullYear()}-W${getWeekNumber(date)}`;
-                    weeklyVolume[weekKey] = (weeklyVolume[weekKey] || 0) + totalVolume;
-                }
-            });
-            const sortedWeeks = Object.keys(weeklyVolume).sort();
-            renderChart(sortedWeeks, sortedWeeks.map(week => weeklyVolume[week]));
-        }
-        
-        function renderChart(labels, data) {
-            const ctx = document.getElementById('volume-chart').getContext('2d');
-            if (chartInstance) chartInstance.destroy();
-            chartInstance = new Chart(ctx, {
-                type: 'line',
-                data: { labels, datasets: [{
-                    label: 'Total Volume (KG)', data,
-                    backgroundColor: 'rgba(66, 153, 225, 0.2)',
-                    borderColor: 'rgba(66, 153, 225, 1)',
-                    borderWidth: 2, tension: 0.1, fill: true
-                }]},
-                options: { scales: { y: { beginAtZero: true } }, responsive: true }
-            });
-        }
-        
-        function getWeekNumber(d) {
-            d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-            d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-            const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-            return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-        }
-
-        function showError(message) {
-            errorMessage.textContent = message;
-            switchView('error-view');
-        }
-    </script>
+    <script src="app.js"></script>
 </body>
 </html>
