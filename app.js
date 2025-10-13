@@ -17,7 +17,7 @@ let nextWorkoutData = null;
 let chartInstance = null;
 let exerciseChartInstance = null;
 let progressPieChartInstance = null;
-let workoutSkipOffset = 0;
+let workoutSkipOffset = -1;
 let currentWorkoutGroupIndex = 0;
 
 // --- INITIALIZATION ---
@@ -71,7 +71,7 @@ function switchView(viewId) {
  */
 async function handleFetchData() {
     try {
-        workoutSkipOffset = 0;
+        workoutSkipOffset = -1;
         switchView('loader-view');
         const [chestData, backData, legsData] = await Promise.all([
             fetchSheet(CONFIG.chest, 'Chest'),
@@ -80,11 +80,34 @@ async function handleFetchData() {
         ]);
         
         allWorkoutsData = [...chestData, ...backData, ...legsData];
-        const workoutGroups = [chestData, backData, legsData];
-        nextWorkoutData = findNextWorkout(workoutGroups);
-        const lastCompletedWorkout = findLastCompletedWorkout(workoutGroups);
 
-        displayNextWorkout(nextWorkoutData, lastCompletedWorkout);
+        const workoutGroups = [chestData, backData, legsData];
+        let lastCompletedDates = [];
+
+        for (const group of workoutGroups) {
+            let lastDate = null;
+            for (const workout of group) {
+                if (workout['Completed_workout']?.toLowerCase() === 'ja' && workout.Datum) {
+                    const parts = workout.Datum.split('/');
+                    const workoutDate = new Date(parts[2], parts[1] - 1, parts[0]);
+                    if (!lastDate || workoutDate > lastDate) {
+                        lastDate = workoutDate;
+                    }
+                }
+            }
+            lastCompletedDates.push({ group, lastDate });
+        }
+
+        lastCompletedDates.sort((a, b) => {
+            if (!a.lastDate) return -1; // Groups with no completed workouts first
+            if (!b.lastDate) return 1;
+            return a.lastDate - b.lastDate;
+        });
+
+        const workoutGroupOrder = ['Chest', 'Back', 'Legs'];
+        const leastRecentGroup = lastCompletedDates[0].group[0].workoutType;
+        currentWorkoutGroupIndex = workoutGroupOrder.indexOf(leastRecentGroup);
+
         prepareDashboard();
         
         switchView('home-view');
@@ -102,7 +125,7 @@ async function handleFetchData() {
  */
 async function fetchSheet(url, type) {
     console.log(`Fetching ${type} data from: ${url}`);
-    const response = await fetch(url);
+    const response = await fetch(`${url}&_=${new Date().getTime()}`);
     if (!response.ok) throw new Error(`Failed to fetch ${type} sheet.`);
     const text = await response.text();
     console.log(`Raw response for ${type}:`, text);
@@ -130,10 +153,19 @@ async function fetchSheet(url, type) {
     return data;
 }
 
-function findNextWorkout(workoutGroups, offset = 0) {
-    let uncompletedWorkouts = [];
-    let lastCompletedDates = [];
 
+
+function findNextWorkout(workoutGroups, offset = 0) {
+    let allWorkouts = [].concat(...workoutGroups);
+    let uncompletedWorkouts = allWorkouts.filter(w => w['Completed_workout']?.toLowerCase() === 'nej');
+
+    // If there are no uncompleted workouts, return null
+    if (uncompletedWorkouts.length === 0) {
+        return null;
+    }
+
+    // Create a map to store the last completed date for each workout type
+    const lastCompletedDates = {};
     for (const group of workoutGroups) {
         let lastDate = null;
         for (const workout of group) {
@@ -145,31 +177,35 @@ function findNextWorkout(workoutGroups, offset = 0) {
                 }
             }
         }
-        lastCompletedDates.push({ group, lastDate });
+        if(group.length > 0){
+            lastCompletedDates[group[0].workoutType] = lastDate;
+        }
     }
 
-    const groupsWithNoCompleted = lastCompletedDates.filter(g => !g.lastDate);
-    if (groupsWithNoCompleted.length > 0) {
-        for (const { group } of groupsWithNoCompleted) {
-            group.forEach(w => {
-                if (w['Completed_workout']?.toLowerCase() === 'nej') {
-                    uncompletedWorkouts.push(w);
-                }
-            });
+    // Sort uncompleted workouts
+    uncompletedWorkouts.sort((a, b) => {
+        const aDate = lastCompletedDates[a.workoutType];
+        const bDate = lastCompletedDates[b.workoutType];
+
+        if (!aDate && bDate) return -1;
+        if (aDate && !bDate) return 1;
+        if (!aDate && !bDate) {
+            const typeOrder = { 'Chest': 0, 'Back': 1, 'Legs': 2 };
+            if(typeOrder[a.workoutType] !== typeOrder[b.workoutType]){
+                return typeOrder[a.workoutType] - typeOrder[b.workoutType];
+            }
+            return a.originalRowIndex - b.originalRowIndex;
         }
-    } else {
-        lastCompletedDates.sort((a, b) => a.lastDate - b.lastDate);
-        for (const { group } of lastCompletedDates) {
-            group.forEach(w => {
-                if (w['Completed_workout']?.toLowerCase() === 'nej') {
-                    uncompletedWorkouts.push(w);
-                }
-            });
+        if (aDate !== bDate) {
+            return aDate - bDate;
         }
-    }
+        return a.originalRowIndex - b.originalRowIndex;
+    });
 
     return uncompletedWorkouts[offset] || null;
 }
+
+
 
 /**
  * Finds the last completed workout.
@@ -355,13 +391,12 @@ function renderProgressPieChart(completedPercentage, currentWeekVolume) {
 // --- UI RENDERING ---
 
 function updateWorkoutView() {
-    const workoutGroups = [allWorkoutsData.filter(w => w.workoutType === 'Chest'), allWorkoutsData.filter(w => w.workoutType === 'Back'), allWorkoutsData.filter(w => w.workoutType === 'Legs')];
     const workoutGroupOrder = ['Chest', 'Back', 'Legs'];
     const currentGroup = workoutGroupOrder[currentWorkoutGroupIndex];
     const workoutsInGroup = allWorkoutsData.filter(w => w.workoutType === currentGroup && w['Completed_workout']?.toLowerCase() === 'nej');
 
     nextWorkoutData = workoutsInGroup[0] || null;
-    const lastCompletedWorkout = findLastCompletedWorkout(workoutGroups);
+    const lastCompletedWorkout = findLastCompletedWorkout([allWorkoutsData.filter(w => w.workoutType === currentGroup)]);
     displayNextWorkout(nextWorkoutData, lastCompletedWorkout);
 }
 
