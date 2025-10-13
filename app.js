@@ -16,22 +16,36 @@ let allWorkoutsData = [];
 let nextWorkoutData = null;
 let chartInstance = null;
 let exerciseChartInstance = null;
+let progressPieChartInstance = null;
+let workoutSkipOffset = 0;
+let currentWorkoutGroupIndex = 0;
 
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', handleFetchData);
 
 // --- EVENT LISTENERS ---
-document.getElementById('show-workout-btn').addEventListener('click', () => switchView('workout-view'));
+
+document.getElementById('show-workout-btn').addEventListener('click', () => {
+    workoutSkipOffset = 0;
+    updateWorkoutView();
+    switchView('workout-view');
+});
+
 document.getElementById('show-stats-btn').addEventListener('click', () => {
     switchView('dashboard-view');
     prepareDashboard();
 });
 
 document.getElementById('refresh-data-btn').addEventListener('click', handleFetchData);
+document.getElementById('home-from-completion-btn').addEventListener('click', () => location.reload());
 
 workoutView.addEventListener('click', (e) => {
     if (e.target.classList.contains('back-btn')) {
         switchView('home-view');
+    } else if (e.target.id === 'complete-btn') {
+        markWorkoutComplete();
+    } else if (e.target.id === 'skip-btn') {
+        skipWorkout();
     }
 });
 
@@ -57,6 +71,7 @@ function switchView(viewId) {
  */
 async function handleFetchData() {
     try {
+        workoutSkipOffset = 0;
         switchView('loader-view');
         const [chestData, backData, legsData] = await Promise.all([
             fetchSheet(CONFIG.chest, 'Chest'),
@@ -115,20 +130,45 @@ async function fetchSheet(url, type) {
     return data;
 }
 
-/**
- * Finds the next workout that has not been completed.
- * @param {object[][]} workoutGroups - An array of workout groups.
- * @returns {object|null} The next workout object, or null if all are completed.
- */
-function findNextWorkout(workoutGroups) {
+function findNextWorkout(workoutGroups, offset = 0) {
+    let uncompletedWorkouts = [];
+    let lastCompletedDates = [];
+
     for (const group of workoutGroups) {
+        let lastDate = null;
         for (const workout of group) {
-            if (workout['Completed_workout']?.toLowerCase() === 'nej') {
-                return workout;
+            if (workout['Completed_workout']?.toLowerCase() === 'ja' && workout.Datum) {
+                const parts = workout.Datum.split('/');
+                const workoutDate = new Date(parts[2], parts[1] - 1, parts[0]);
+                if (!lastDate || workoutDate > lastDate) {
+                    lastDate = workoutDate;
+                }
             }
         }
+        lastCompletedDates.push({ group, lastDate });
     }
-    return null;
+
+    const groupsWithNoCompleted = lastCompletedDates.filter(g => !g.lastDate);
+    if (groupsWithNoCompleted.length > 0) {
+        for (const { group } of groupsWithNoCompleted) {
+            group.forEach(w => {
+                if (w['Completed_workout']?.toLowerCase() === 'nej') {
+                    uncompletedWorkouts.push(w);
+                }
+            });
+        }
+    } else {
+        lastCompletedDates.sort((a, b) => a.lastDate - b.lastDate);
+        for (const { group } of lastCompletedDates) {
+            group.forEach(w => {
+                if (w['Completed_workout']?.toLowerCase() === 'nej') {
+                    uncompletedWorkouts.push(w);
+                }
+            });
+        }
+    }
+
+    return uncompletedWorkouts[offset] || null;
 }
 
 /**
@@ -200,7 +240,7 @@ async function markWorkoutComplete() {
         });
         const result = await response.json();
         if (result.status === 'success') {
-            showNotification('Session complete!');
+            showCompletionScreen();
         } else {
             throw new Error(result.message || 'The script returned an error.');
         }
@@ -212,19 +252,145 @@ async function markWorkoutComplete() {
     }
 }
 
+
+function showCompletionScreen() {
+    const weeklyGoal = 12000; // 12000 kg
+    const completedWorkouts = allWorkoutsData.filter(w => w['Completed_workout']?.toLowerCase() === 'ja' && w.Datum);
+    const currentWeekNumber = getWeekNumber(new Date());
+    const currentYear = new Date().getFullYear();
+
+    let currentWeekVolume = 0;
+    completedWorkouts.forEach(workout => {
+        const dateStr = workout.Datum;
+        let date;
+        if (dateStr.includes('/')) {
+            const parts = dateStr.split('/');
+            date = new Date(parts[2], parts[1] - 1, parts[0]);
+        } else if (dateStr.includes('-')) {
+            date = new Date(dateStr);
+        }
+
+        if (date && getWeekNumber(date) === currentWeekNumber && date.getFullYear() === currentYear) {
+            for (const key in workout) {
+                if (key.endsWith('_volym') && workout[key]) {
+                    currentWeekVolume += parseFloat(workout[key]) || 0;
+                }
+            }
+        }
+    });
+
+    // Add the volume of the workout that was just completed
+    for (const key in nextWorkoutData) {
+        if (key.endsWith('_volym') && nextWorkoutData[key]) {
+            currentWeekVolume += parseFloat(nextWorkoutData[key]) || 0;
+        }
+    }
+
+    const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
+    renderProgressPieChart(percentage, currentWeekVolume);
+    switchView('completion-view');
+
+    setTimeout(() => {
+        location.reload();
+    }, 6000); // Reload after 6 seconds
+}
+
+function renderProgressPieChart(completedPercentage, currentWeekVolume) {
+    const ctx = document.getElementById('progress-pie-chart').getContext('2d');
+    if (progressPieChartInstance) {
+        progressPieChartInstance.destroy();
+    }
+
+    const data = {
+        labels: ['Completed', 'Remaining'],
+        datasets: [{
+            data: [completedPercentage, 100 - completedPercentage],
+            backgroundColor: ['#48BB78', '#4A5568'],
+            hoverBackgroundColor: ['#38A169', '#2D3748'],
+            borderWidth: 0,
+        }]
+    };
+
+    const centerText = {
+        id: 'centerText',
+        afterDraw(chart, args, options) {
+            const {ctx, chartArea: {left, right, top, bottom, width, height}} = chart;
+            ctx.save();
+            
+            // Main number
+            ctx.font = 'bold 30px Inter';
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${Math.round(currentWeekVolume)} kg`, width / 2, top + (height / 2) - 10);
+
+            // Percentage
+            ctx.font = '16px Inter';
+            ctx.fillStyle = 'gray';
+            ctx.fillText(`(${completedPercentage.toFixed(1)}%)`, width / 2, top + (height / 2) + 15);
+            
+            ctx.restore();
+        }
+    }
+
+    progressPieChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: data,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    enabled: false
+                }
+            }
+        },
+        plugins: [centerText]
+    });
+}
+
 // --- UI RENDERING ---
+
+function updateWorkoutView() {
+    const workoutGroups = [allWorkoutsData.filter(w => w.workoutType === 'Chest'), allWorkoutsData.filter(w => w.workoutType === 'Back'), allWorkoutsData.filter(w => w.workoutType === 'Legs')];
+    const workoutGroupOrder = ['Chest', 'Back', 'Legs'];
+    const currentGroup = workoutGroupOrder[currentWorkoutGroupIndex];
+    const workoutsInGroup = allWorkoutsData.filter(w => w.workoutType === currentGroup && w['Completed_workout']?.toLowerCase() === 'nej');
+
+    nextWorkoutData = workoutsInGroup[0] || null;
+    const lastCompletedWorkout = findLastCompletedWorkout(workoutGroups);
+    displayNextWorkout(nextWorkoutData, lastCompletedWorkout);
+}
+
+/**This function updates the state-variable with +1 --> pushing us to get the next workout. */
+function skipWorkout() {
+    currentWorkoutGroupIndex = (currentWorkoutGroupIndex + 1) % 3; // Cycle through 0, 1, 2
+    updateWorkoutView();
+}
 
 /**
  * Displays the next workout information.
  * @param {object} nextWorkout - The data for the next workout.
  * @param {object} lastCompletedWorkout - The data for the last completed workout.
  */
+
 function displayNextWorkout(nextWorkout, lastCompletedWorkout) {
-    let content = `<button class="back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Home</button>`;
+    console.log('nextWorkout:', nextWorkout);
+    workoutView.innerHTML = ''; // Clear the view
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300';
+    backBtn.innerHTML = '&larr; Back to Home';
+    workoutView.appendChild(backBtn);
 
     if (!nextWorkout) {
-        content += `<div class="bg-gray-800 p-6 rounded-2xl text-center"><p class="text-xl font-bold text-green-400">All workouts completed!</p></div>`;
-        workoutView.innerHTML = content;
+        const allCompleted = document.createElement('div');
+        allCompleted.className = 'bg-gray-800 p-6 rounded-2xl text-center';
+        allCompleted.innerHTML = `<p class="text-xl font-bold text-green-400">All workouts completed!</p>`;
+        workoutView.appendChild(allCompleted);
         return;
     }
 
@@ -248,8 +414,20 @@ function displayNextWorkout(nextWorkout, lastCompletedWorkout) {
 
     const container = document.createElement('div');
     container.className = 'bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700';
-    
-    let exercisesHTML = '';
+
+    const title = document.createElement('h2');
+    title.className = 'text-2xl font-bold text-center text-blue-300';
+    title.textContent = `Next Up: ${nextWorkout.workoutType}`;
+    container.appendChild(title);
+
+    const message = document.createElement('p');
+    message.className = 'text-center text-gray-400 mb-6';
+    message.textContent = funnyMessage;
+    container.appendChild(message);
+
+    const exercisesContainer = document.createElement('div');
+    exercisesContainer.className = 'space-y-3';
+
     const exercises = [];
     for (const key in nextWorkout) {
         if (key.endsWith('_KG') && nextWorkout[key]) {
@@ -262,37 +440,33 @@ function displayNextWorkout(nextWorkout, lastCompletedWorkout) {
             });
         }
     }
+
     exercises.forEach(ex => {
-        exercisesHTML += `
-            <div class="bg-gray-700 p-4 rounded-lg">
-                <p class="text-lg font-semibold capitalize">${ex.name}</p>
-                <div class="grid grid-cols-3 gap-4 text-center mt-2">
-                    <div><p class="text-xs text-gray-400">Weight</p><p class="text-xl font-bold text-orange-400">${ex.kg} kg</p></div>
-                    <div><p class="text-xs text-gray-400">Reps</p><p class="text-xl font-bold">${ex.reps}</p></div>
-                    <div><p class="text-xs text-gray-400">Sets</p><p class="text-xl font-bold">${ex.sets}</p></div>
-                </div>
+        const exDiv = document.createElement('div');
+        exDiv.className = 'bg-gray-700 p-4 rounded-lg';
+        exDiv.innerHTML = `
+            <p class="text-lg font-semibold capitalize">${ex.name}</p>
+            <div class="grid grid-cols-3 gap-4 text-center mt-2">
+                <div><p class="text-xs text-gray-400">Weight</p><p class="text-xl font-bold text-orange-400">${ex.kg} kg</p></div>
+                <div><p class="text-xs text-gray-400">Reps</p><p class="text-xl font-bold">${ex.reps}</p></div>
+                <div><p class="text-xs text-gray-400">Sets</p><p class="text-xl font-bold">${ex.sets}</p></div>
             </div>`;
+        exercisesContainer.appendChild(exDiv);
     });
 
-    container.innerHTML = `
-        <h2 class="text-2xl font-bold text-center text-blue-300">Next Up: ${nextWorkout.workoutType}</h2>
-        <p class="text-center text-gray-400 mb-6">${funnyMessage}</p>
-        <div class="space-y-3">${exercisesHTML}</div>
-        <div class="mt-8 text-center">
-            <p class="font-semibold mb-3">Did you complete this workout today?</p>
-            <div class="flex justify-center gap-4">
-                <button id="complete-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Yes, I'm Done!</button>
-                <button id="skip-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg">Skip for Now</button>
-            </div>
+    container.appendChild(exercisesContainer);
+
+    const completionDiv = document.createElement('div');
+    completionDiv.className = 'mt-8 text-center';
+    completionDiv.innerHTML = `
+        <p class="font-semibold mb-3">Did you complete this workout today?</p>
+        <div class="flex justify-center gap-4">
+            <button id="complete-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Yes, I'm Done!</button>
+            <button id="skip-btn" class="bg-yellow-600 hover:bg-black-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Skip this workout for now!</button>
         </div>`;
-    
-    workoutView.innerHTML = content;
+    container.appendChild(completionDiv);
+
     workoutView.appendChild(container);
-    
-    // Add event listeners for the new buttons
-    workoutView.querySelector('.back-btn').addEventListener('click', () => switchView('home-view'));
-    workoutView.querySelector('#complete-btn').addEventListener('click', markWorkoutComplete);
-    workoutView.querySelector('#skip-btn').addEventListener('click', () => alert("Skip feature coming soon!"));
 }
 
 // --- DASHBOARD ---

@@ -89,6 +89,18 @@
                 <div id="average-sessions"></div>
             </div>
         </div>
+
+        <!-- View 6: Completion Screen -->
+        <div id="completion-view" class="view">
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 text-center">
+                <h2 class="text-2xl font-bold text-green-400">Session Complete!</h2>
+                <p class="text-gray-400 mt-2 mb-6">Here's your weekly progress towards your 12,000kg goal.</p>
+                <div class="relative w-64 h-64 mx-auto">
+                    <canvas id="progress-pie-chart"></canvas>
+                </div>
+                <button id="home-from-completion-btn" class="mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg">Back to Home</button>
+            </div>
+        </div>
     </div>
 
     <script src="app.js"></script>
