@@ -17,6 +17,7 @@ let nextWorkoutData = null;
 let chartInstance = null;
 let exerciseChartInstance = null;
 let progressPieChartInstance = null;
+let dashboardProgressPieChartInstance = null;
 let workoutSkipOffset = -1;
 let currentWorkoutGroupIndex = 0;
 
@@ -295,7 +296,8 @@ function showCompletionScreen() {
     const currentWeekNumber = getWeekNumber(new Date());
     const currentYear = new Date().getFullYear();
 
-    let currentWeekVolume = 0;
+    const weeklyVolumeByType = { 'Chest': 0, 'Back': 0, 'Legs': 0 };
+
     completedWorkouts.forEach(workout => {
         const dateStr = workout.Datum;
         let date;
@@ -307,23 +309,32 @@ function showCompletionScreen() {
         }
 
         if (date && getWeekNumber(date) === currentWeekNumber && date.getFullYear() === currentYear) {
+            let workoutVolume = 0;
             for (const key in workout) {
                 if (key.endsWith('_volym') && workout[key]) {
-                    currentWeekVolume += parseFloat(workout[key]) || 0;
+                    workoutVolume += parseFloat(workout[key]) || 0;
                 }
+            }
+            if (weeklyVolumeByType[workout.workoutType] !== undefined) {
+                weeklyVolumeByType[workout.workoutType] += workoutVolume;
             }
         }
     });
 
     // Add the volume of the workout that was just completed
+    let justCompletedVolume = 0;
     for (const key in nextWorkoutData) {
         if (key.endsWith('_volym') && nextWorkoutData[key]) {
-            currentWeekVolume += parseFloat(nextWorkoutData[key]) || 0;
+            justCompletedVolume += parseFloat(nextWorkoutData[key]) || 0;
         }
     }
+    if (weeklyVolumeByType[nextWorkoutData.workoutType] !== undefined) {
+        weeklyVolumeByType[nextWorkoutData.workoutType] += justCompletedVolume;
+    }
 
+    const currentWeekVolume = Object.values(weeklyVolumeByType).reduce((sum, vol) => sum + vol, 0);
     const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
-    renderProgressPieChart(percentage, currentWeekVolume);
+    renderProgressPieChart(percentage, currentWeekVolume, weeklyVolumeByType);
     switchView('completion-view');
 
     setTimeout(() => {
@@ -331,18 +342,50 @@ function showCompletionScreen() {
     }, 6000); // Reload after 6 seconds
 }
 
-function renderProgressPieChart(completedPercentage, currentWeekVolume) {
+function renderProgressPieChart(completedPercentage, currentWeekVolume, weeklyVolumeByType) {
     const ctx = document.getElementById('progress-pie-chart').getContext('2d');
     if (progressPieChartInstance) {
         progressPieChartInstance.destroy();
     }
 
+    const weeklyGoal = 12000;
+    const remainingVolume = Math.max(0, weeklyGoal - currentWeekVolume);
+
+    const exerciseColors = {
+        'Chest': '#48BB78', // green
+        'Back': '#F56565',  // red
+        'Legs': '#4299E1',  // blue
+    };
+    const exerciseHoverColors = {
+        'Chest': '#38A169',
+        'Back': '#E53E3E',
+        'Legs': '#3182CE',
+    };
+
+    const labels = Object.keys(weeklyVolumeByType).filter(type => weeklyVolumeByType[type] > 0);
+    const dataValues = labels.map(label => weeklyVolumeByType[label]);
+    const backgroundColors = labels.map(label => exerciseColors[label]);
+    const hoverBackgroundColors = labels.map(label => exerciseHoverColors[label]);
+
+    if (remainingVolume > 0) {
+        labels.push('Remaining');
+        dataValues.push(remainingVolume);
+        backgroundColors.push('#4A5568');
+        hoverBackgroundColors.push('#2D3748');
+    }
+
+    console.log('DEBUG: weeklyVolumeByType:', weeklyVolumeByType);
+    console.log('DEBUG: labels:', labels);
+    console.log('DEBUG: dataValues:', dataValues);
+    console.log('DEBUG: backgroundColors:', backgroundColors);
+
+
     const data = {
-        labels: ['Completed', 'Remaining'],
+        labels: labels,
         datasets: [{
-            data: [completedPercentage, 100 - completedPercentage],
-            backgroundColor: ['#48BB78', '#4A5568'],
-            hoverBackgroundColor: ['#38A169', '#2D3748'],
+            data: dataValues,
+            backgroundColor: backgroundColors,
+            hoverBackgroundColor: hoverBackgroundColors,
             borderWidth: 0,
         }]
     };
@@ -377,10 +420,170 @@ function renderProgressPieChart(completedPercentage, currentWeekVolume) {
             cutout: '70%',
             plugins: {
                 legend: {
-                    display: false
+                    display: true, // Enable legend
+                    position: 'bottom',
+                    align: 'center', // Align legend items horizontally
+                    labels: {
+                        color: 'white',
+                        font: {
+                            size: 14,
+                            color: 'white' // Use 'color' inside font object for Chart.js v3+
+                        },
+                        generateLabels: function(chart) {
+                            const data = chart.data;
+                            if (data.labels.length && data.datasets.length) {
+                                return data.labels.map(function(label, i) {
+                                    const value = data.datasets[0].data[i];
+                                    return {
+                                        text: `${label} (${Math.round(value)} kg)`,
+                                        fillStyle: data.datasets[0].backgroundColor[i],
+                                        // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0
+                                        lineWidth: data.datasets[0].borderWidth,
+                                        hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0
+                                        index: i
+                                    };
+                                });
+                            }
+                            return [];
+                        }
+                    }
                 },
                 tooltip: {
-                    enabled: false
+                    enabled: true,
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed !== null) {
+                                label += Math.round(context.parsed) + ' kg';
+                            }
+                            return label;
+                        }
+                    }
+                }
+            }
+        },
+        plugins: [centerText]
+    });
+}
+
+function renderDashboardProgressPieChart(completedPercentage, currentWeekVolume, weeklyVolumeByType) {
+    const ctx = document.getElementById('dashboard-progress-pie-chart').getContext('2d');
+    if (dashboardProgressPieChartInstance) {
+        dashboardProgressPieChartInstance.destroy();
+    }
+
+    const weeklyGoal = 12000;
+    const remainingVolume = Math.max(0, weeklyGoal - currentWeekVolume);
+
+    const exerciseColors = {
+        'Chest': '#48BB78', // green
+        'Back': '#F56565',  // red
+        'Legs': '#4299E1',  // blue
+    };
+    const exerciseHoverColors = {
+        'Chest': '#38A169',
+        'Back': '#E53E3E',
+        'Legs': '#3182CE',
+    };
+
+    const labels = Object.keys(weeklyVolumeByType).filter(type => weeklyVolumeByType[type] > 0);
+    const dataValues = labels.map(label => weeklyVolumeByType[label]);
+    const backgroundColors = labels.map(label => exerciseColors[label]);
+    const hoverBackgroundColors = labels.map(label => exerciseHoverColors[label]);
+
+    if (remainingVolume > 0) {
+        labels.push('Remaining');
+        dataValues.push(remainingVolume);
+        backgroundColors.push('#4A5568');
+        hoverBackgroundColors.push('#2D3748');
+    }
+
+
+    const data = {
+        labels: labels,
+        datasets: [{
+            data: dataValues,
+            backgroundColor: backgroundColors,
+            hoverBackgroundColor: hoverBackgroundColors,
+            borderWidth: 0,
+        }]
+    };
+
+    const centerText = {
+        id: 'centerText',
+        afterDraw(chart, args, options) {
+            const {ctx, chartArea: {left, right, top, bottom, width, height}} = chart;
+            ctx.save();
+            
+            // Main number
+            ctx.font = 'bold 30px Inter';
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${Math.round(currentWeekVolume)} kg`, width / 2, top + (height / 2) - 10);
+
+            // Percentage
+            ctx.font = '16px Inter';
+            ctx.fillStyle = 'gray';
+            ctx.fillText(`(${completedPercentage.toFixed(1)}%)`, width / 2, top + (height / 2) + 15);
+            
+            ctx.restore();
+        }
+    }
+
+    dashboardProgressPieChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: data,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: {
+                legend: {
+                    display: true, // Enable legend
+                    position: 'bottom',
+                    align: 'center', // Align legend items horizontally
+                    labels: {
+                        color: 'white',
+                        font: {
+                            size: 14,
+                            color: 'white' // Use 'color' inside font object for Chart.js v3+
+                        },
+                        generateLabels: function(chart) {
+                            const data = chart.data;
+                            if (data.labels.length && data.datasets.length) {
+                                return data.labels.map(function(label, i) {
+                                    const value = data.datasets[0].data[i];
+                                    return {
+                                        text: `${label} (${Math.round(value)} kg)`,
+                                        fillStyle: data.datasets[0].backgroundColor[i],
+                                        // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0
+                                        lineWidth: data.datasets[0].borderWidth,
+                                        hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0,
+                                        index: i
+                                    };
+                                });
+                            }
+                            return [];
+                        }
+                    }
+                },
+                tooltip: {
+                    enabled: true,
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed !== null) {
+                                label += Math.round(context.parsed) + ' kg';
+                            }
+                            return label;
+                        }
+                    }
                 }
             }
         },
@@ -564,9 +767,10 @@ function prepareDashboard() {
 
     const datasets = Object.keys(weeklyVolume).map(exercise => {
         const data = allWeeks.map(week => weeklyVolume[exercise][week] || 0);
+        const rollingAverageData = calculateRollingAverage(data, 6); // 6-week rolling average
         return {
-            label: `${exercise} Volume (KG)`,
-            data: data,
+            label: `${exercise} Volume (6-Week Avg)`,
+            data: rollingAverageData,
             borderColor: exerciseColors[exercise] || `hsl(${Math.random() * 360}, 70%, 50%)`,
             borderWidth: 1,
             fill: false,
@@ -581,11 +785,12 @@ function prepareDashboard() {
     const exerciseData = Object.values(exerciseCounts);
     renderSessionsChart(exerciseLabels, exerciseData);
 
-    // Calculate and display average sessions per week
-    const averageSessionsDiv = document.getElementById('average-sessions');
-    let averageSessionsHTML = '';
-    const yearlyExerciseCounts = {};
+    // Calculate and display weekly goal progress
+    const weeklyGoal = 12000; // 12000 kg
+    const currentWeekNumber = getWeekNumber(new Date());
+    const currentYear = new Date().getFullYear();
 
+    const weeklyVolumeByType = { 'Chest': 0, 'Back': 0, 'Legs': 0 };
     completed.forEach(workout => {
         const dateStr = workout.Datum;
         let date;
@@ -596,33 +801,22 @@ function prepareDashboard() {
             date = new Date(dateStr);
         }
 
-        if (date) {
-            const year = date.getFullYear();
-            const exerciseType = workout.workoutType;
-
-            if (!yearlyExerciseCounts[year]) {
-                yearlyExerciseCounts[year] = {};
+        if (date && getWeekNumber(date) === currentWeekNumber && date.getFullYear() === currentYear) {
+            let workoutVolume = 0;
+            for (const key in workout) {
+                if (key.endsWith('_volym') && workout[key]) {
+                    workoutVolume += parseFloat(workout[key]) || 0;
+                }
             }
-            if (!yearlyExerciseCounts[year][exerciseType]) {
-                yearlyExerciseCounts[year][exerciseType] = 0;
+            if (weeklyVolumeByType[workout.workoutType] !== undefined) {
+                weeklyVolumeByType[workout.workoutType] += workoutVolume;
             }
-            yearlyExerciseCounts[year][exerciseType]++;
         }
     });
+    const currentWeekVolume = Object.values(weeklyVolumeByType).reduce((sum, vol) => sum + vol, 0);
 
-    const years = Object.keys(yearlyExerciseCounts).sort().reverse();
-    years.forEach(year => {
-        averageSessionsHTML += `<div class="mt-4"><h3 class="text-xl font-bold text-center text-blue-300 mb-2">${year}</h3><div class="grid grid-cols-3 gap-4">`;
-        for (const exerciseType in yearlyExerciseCounts[year]) {
-            const count = yearlyExerciseCounts[year][exerciseType];
-            const weeksInYear = (year === new Date().getFullYear().toString()) ? (new Date().getMonth() * 4.345) : 52;
-            const average = (count / weeksInYear).toFixed(2);
-            averageSessionsHTML += `<div class="text-center"><p class="text-lg font-semibold">${exerciseType}</p><p class="text-2xl font-bold text-blue-400">${average}</p></div>`;
-        }
-        averageSessionsHTML += `</div></div>`;
-    });
-
-    averageSessionsDiv.innerHTML = averageSessionsHTML;
+    const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
+    renderDashboardProgressPieChart(percentage, currentWeekVolume, weeklyVolumeByType);
 }
 
 
@@ -641,11 +835,16 @@ function renderChart(labels, datasets) {
     });
 }
 
+
+
 /**
  * Renders the total sessions per exercise chart.
  * @param {string[]} labels - The chart labels (exercise types).
  * @param {number[]} data - The chart data (total sessions).
  */
+
+
+
 function renderSessionsChart(labels, data) {
     const ctx = document.getElementById('sessions-chart').getContext('2d');
     if (exerciseChartInstance) exerciseChartInstance.destroy();
@@ -685,6 +884,22 @@ function renderSessionsChart(labels, data) {
 }
 
 // --- UTILITY FUNCTIONS ---
+
+/**
+ * Calculates the rolling average of a dataset.
+ * @param {number[]} data - The input data.
+ * @param {number} windowSize - The size of the rolling window.
+ * @returns {number[]} The rolling average data.
+ */
+function calculateRollingAverage(data, windowSize) {
+    const rollingAverage = [];
+    for (let i = 0; i < data.length; i++) {
+        const window = data.slice(Math.max(0, i - windowSize + 1), i + 1);
+        const average = window.reduce((a, b) => a + b, 0) / window.length;
+        rollingAverage.push(average);
+    }
+    return rollingAverage;
+}
 
 /**
  * Gets the ISO week number for a given date.
