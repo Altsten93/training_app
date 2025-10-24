@@ -26,6 +26,32 @@
         #completion-view span {
             color: white !important;
         }
+
+        #difficulty-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 10px;
+            border-radius: 5px;
+            outline: none;
+        }
+
+        #difficulty-slider::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 10px;
+            cursor: pointer;
+            background: linear-gradient(to right, green, red);
+            border-radius: 5px;
+        }
+
+        #difficulty-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 25px;
+            width: 25px;
+            border-radius: 50%;
+            background: #fff;
+            cursor: pointer;
+            margin-top: -7.5px;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-200 min-h-screen">
@@ -106,7 +132,16 @@
                 <div class="relative w-96 h-80 mx-auto">
                     <canvas id="progress-pie-chart"></canvas>
                 </div>
-                <button id="home-from-completion-btn" class="mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg">Back to Home</button>
+                
+                <!-- New Difficulty Rating Section -->
+                <div id="difficulty-rating-section" class="mt-6">
+                    <label for="difficulty-slider" class="block text-lg font-semibold mb-2">How difficult was this session? (1-10)</label>
+                    <input type="range" id="difficulty-slider" min="1" max="10" value="5" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    <div class="text-xl font-bold mt-2" id="difficulty-value">5</div>
+                    <button id="submit-difficulty-btn" class="mt-4 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg">Submit Rating</button>
+                </div>
+
+                <button id="home-from-completion-btn" class="mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg" style="display: none;">Back to Home</button>
             </div>
         </div>
     </div>

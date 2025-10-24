@@ -40,11 +40,21 @@ document.getElementById('show-stats-btn').addEventListener('click', () => {
 document.getElementById('refresh-data-btn').addEventListener('click', handleFetchData);
 document.getElementById('home-from-completion-btn').addEventListener('click', () => location.reload());
 
+document.getElementById('difficulty-slider').addEventListener('input', (e) => {
+    document.getElementById('difficulty-value').textContent = e.target.value;
+});
+
+document.getElementById('submit-difficulty-btn').addEventListener('click', () => {
+    const difficulty = document.getElementById('difficulty-slider').value;
+    markWorkoutComplete(difficulty);
+});
+
+
 workoutView.addEventListener('click', (e) => {
     if (e.target.classList.contains('back-btn')) {
         switchView('home-view');
     } else if (e.target.id === 'complete-btn') {
-        markWorkoutComplete();
+        showCompletionScreen();
     } else if (e.target.id === 'skip-btn') {
         skipWorkout();
     }
@@ -255,8 +265,8 @@ function showNotification(message) {
 /**
  * Marks the current workout as complete and updates the Google Sheet.
  */
-async function markWorkoutComplete() {
-    const button = document.getElementById('complete-btn');
+async function markWorkoutComplete(difficulty) {
+    const button = document.getElementById('submit-difficulty-btn');
     button.disabled = true;
     button.textContent = 'Updating...';
 
@@ -266,7 +276,8 @@ async function markWorkoutComplete() {
     const payload = {
         sheetName: nextWorkoutData.workoutType, // Send the full workoutType for the backend to map
         rowIndex: nextWorkoutData.originalRowIndex,
-        date: formattedDate
+        date: formattedDate,
+        difficulty: difficulty
     };
 
     try {
@@ -277,7 +288,9 @@ async function markWorkoutComplete() {
         });
         const result = await response.json();
         if (result.status === 'success') {
-            showCompletionScreen();
+            showNotification('Workout completed and difficulty recorded!');
+            document.getElementById('difficulty-rating-section').style.display = 'none';
+            document.getElementById('home-from-completion-btn').style.display = 'block';
         } else {
             throw new Error(result.message || 'The script returned an error.');
         }
@@ -285,7 +298,7 @@ async function markWorkoutComplete() {
         console.error("Error updating sheet:", error);
         alert(`Failed to update sheet. Error: ${error.message}`);
         button.disabled = false;
-        button.textContent = "Yes, I'm Done!";
+        button.textContent = "Submit Rating";
     }
 }
 
@@ -336,10 +349,6 @@ function showCompletionScreen() {
     const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
     renderProgressPieChart(percentage, currentWeekVolume, weeklyVolumeByType);
     switchView('completion-view');
-
-    setTimeout(() => {
-        location.reload();
-    }, 6000); // Reload after 6 seconds
 }
 
 function renderProgressPieChart(completedPercentage, currentWeekVolume, weeklyVolumeByType) {
@@ -427,18 +436,16 @@ function renderProgressPieChart(completedPercentage, currentWeekVolume, weeklyVo
                         color: 'white',
                         font: {
                             size: 14,
-                            color: 'white' // Use 'color' inside font object for Chart.js v3+
                         },
                         generateLabels: function(chart) {
                             const data = chart.data;
                             if (data.labels.length && data.datasets.length) {
                                 return data.labels.map(function(label, i) {
                                     const value = data.datasets[0].data[i];
-                                    return {
-                                        text: `${label} (${Math.round(value)} kg)`,
-                                        fillStyle: data.datasets[0].backgroundColor[i],
-                                        // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0
-                                        lineWidth: data.datasets[0].borderWidth,
+                                                                        return {
+                                                                            text: `${label} (${Math.round(value)} kg)`,
+                                                                                                                    fillStyle: data.datasets[0].backgroundColor[i],
+                                                                                                                    // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0                                        lineWidth: data.datasets[0].borderWidth,
                                         hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0
                                         index: i
                                     };
@@ -549,7 +556,6 @@ function renderDashboardProgressPieChart(completedPercentage, currentWeekVolume,
                         color: 'white',
                         font: {
                             size: 14,
-                            color: 'white' // Use 'color' inside font object for Chart.js v3+
                         },
                         generateLabels: function(chart) {
                             const data = chart.data;
@@ -559,6 +565,7 @@ function renderDashboardProgressPieChart(completedPercentage, currentWeekVolume,
                                     return {
                                         text: `${label} (${Math.round(value)} kg)`,
                                         fillStyle: data.datasets[0].backgroundColor[i],
+                                        fontColor: 'white', // <-- ADD THIS LINE,
                                         // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0
                                         lineWidth: data.datasets[0].borderWidth,
                                         hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0,
