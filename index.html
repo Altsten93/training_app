@@ -6,6 +6,8 @@
     <title>altsten_training_hub</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
@@ -86,6 +88,12 @@
                 <p class="text-gray-400 mt-1">time for some good workouts!</p>
             </header>
             <div class="space-y-4">
+<div class="p-4">
+    <div class="w-full p-6 bg-gray-800 rounded-xl shadow-lg border border-gray-700">
+        <h3 class="text-lg font-semibold text-blue-300 mb-4 text-center">Training Adaptation (Last 3 Months)</h3>
+        <canvas id="intensity-difficulty-chart"></canvas>
+    </div>
+</div>
                 <button id="show-workout-btn" class="w-full text-left p-6 bg-blue-600 hover:bg-blue-700 rounded-xl transition-transform transform hover:scale-105">
                     <h2 class="text-2xl font-bold text-white">Next Workout</h2>
                     <p class="text-blue-200">See your next scheduled training session.</p>

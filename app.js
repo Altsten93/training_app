@@ -645,14 +645,20 @@ function displayNextWorkout(nextWorkout, lastCompletedWorkout) {
         const lastDate = new Date(parts[2], parts[1] - 1, parts[0]);
         const today = new Date();
         const diffTime = Math.abs(today - lastDate);
-        daysSinceLastWorkout = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        daysSinceLastWorkout = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     }
 
     let funnyMessage = "";
-    if (daysSinceLastWorkout > 0) {
-        if (daysSinceLastWorkout > 9) {
+    if (lastCompletedWorkout) {
+        if (daysSinceLastWorkout === 0) {
+            funnyMessage = "You trained this today.";
+        } else if (daysSinceLastWorkout === 1) {
+            funnyMessage = "You trained this yesterday.";
+        } else if (daysSinceLastWorkout === 7) {
+            funnyMessage = "You trained this a week ago.";
+        } else if (daysSinceLastWorkout > 9) {
             funnyMessage = `A wooo, get your fat ass to the gym, it has been ${daysSinceLastWorkout} days ago !!!`;
-        } else {
+        } else if (daysSinceLastWorkout > 0) {
             funnyMessage = `It has been ${daysSinceLastWorkout} days since your last workout.`;
         }
     }
@@ -716,6 +722,7 @@ function displayNextWorkout(nextWorkout, lastCompletedWorkout) {
 
 // --- DASHBOARD ---
 function prepareDashboard() {
+    prepareIntensityDifficultyChartData();
     const completed = allWorkoutsData.filter(w => w['Completed_workout']?.toLowerCase() === 'ja' && w.Datum);
     const weeklyVolume = {};
     const exerciseCounts = {};
@@ -825,6 +832,173 @@ function prepareDashboard() {
     const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
     renderDashboardProgressPieChart(percentage, currentWeekVolume, weeklyVolumeByType);
 }
+
+let intensityDifficultyChartInstance = null;
+/**
+ * Renders the intensity vs difficulty chart.
+ * @param {object[]} datasets - The chart datasets.
+ */
+function renderIntensityDifficultyChart(datasets) {
+    const ctx = document.getElementById('intensity-difficulty-chart').getContext('2d');
+    if (intensityDifficultyChartInstance) {
+        intensityDifficultyChartInstance.destroy();
+    }
+    intensityDifficultyChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            datasets: datasets
+        },
+        options: {
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'week'
+                    },
+                    ticks: {
+                        color: 'white'
+                    }
+                },
+                y: {
+                    min: 0,
+                    max: 1,
+                    ticks: {
+                        color: 'white'
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: 'white'
+                    }
+                }
+            },
+            responsive: true
+        }
+    });
+}
+
+
+function prepareIntensityDifficultyChartData() {
+    const twoMonthsAgo = new Date();
+    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+
+    const completedWorkouts = allWorkoutsData.filter(w => {
+        if (w['Completed_workout']?.toLowerCase() !== 'ja' || !w.Datum) {
+            return false;
+        }
+        let date;
+        if (w.Datum.includes('/')) {
+            const parts = w.Datum.split('/');
+            date = new Date(parts[2], parts[1] - 1, parts[0]);
+        } else if (w.Datum.includes('-')) {
+            date = new Date(w.Datum);
+        }
+        return date && date >= twoMonthsAgo;
+    });
+
+    const workoutMapping = {
+        'Chest': { intensityCol: 'Bänkpress_intensity', difficultyCol: 'Chest_difficulty', color: '#48BB78', dashStyle: [5, 5] },
+        'Back': { intensityCol: 'Deadlift_intensity', difficultyCol: 'Back_difficulty', color: '#F56565', dashStyle: [2, 3] },
+        'Legs': { intensityCol: 'Squat_intensity', difficultyCol: 'Legs_difficulty', color: '#4299E1', dashStyle: [10, 3] }
+    };
+
+    const processedData = { Chest: [], Back: [], Legs: [] };
+
+    for (const workout of completedWorkouts) {
+        const type = workout.workoutType;
+        if (!processedData[type]) continue;
+
+        const mapping = workoutMapping[type];
+        const intensity = parseFloat(workout[mapping.intensityCol]);
+        const difficulty = parseFloat(workout[mapping.difficultyCol]);
+        
+        let date;
+        if (workout.Datum.includes('/')) {
+            const parts = workout.Datum.split('/');
+            date = new Date(parts[2], parts[1] - 1, parts[0]);
+        } else {
+            date = new Date(workout.Datum);
+        }
+
+        if (!isNaN(intensity) && !isNaN(difficulty) && date) {
+            processedData[type].push({ date, intensity, difficulty });
+        }
+    }
+
+    // Create a combined list of all points to normalize them together
+    const allPoints = [].concat(...Object.values(processedData));
+    
+    // Normalize intensities
+    const intensitiesToNormalize = allPoints.map(p => p.intensity);
+    const normalizedIntensities = normalizeData(intensitiesToNormalize);
+    
+    // Normalize difficulties
+    const difficultiesToNormalize = allPoints.map(p => p.difficulty);
+    const normalizedDifficulties = normalizeData(difficultiesToNormalize);
+
+    // Add normalized values back to the points
+    allPoints.forEach((point, index) => {
+        point.normalizedIntensity = normalizedIntensities[index];
+        point.normalizedDifficulty = normalizedDifficulties[index];
+    });
+
+    const datasets = [];
+
+    for (const type in processedData) {
+        const data = processedData[type];
+        if (data.length === 0) continue;
+
+        // Sort data by date
+        data.sort((a, b) => a.date - b.date);
+
+        const intensityData = data.map(d => ({ x: d.date, y: d.normalizedIntensity }));
+        const difficultyData = data.map(d => ({ x: d.date, y: d.normalizedDifficulty }));
+
+        // Apply rolling average for smoothing
+        const windowSize = 3;
+        const smoothedIntensityY = calculateRollingAverage(intensityData.map(d => d.y), windowSize);
+        const smoothedDifficultyY = calculateRollingAverage(difficultyData.map(d => d.y), windowSize);
+
+        const smoothedIntensityData = intensityData.map((d, i) => ({ x: d.x, y: smoothedIntensityY[i] }));
+        const smoothedDifficultyData = difficultyData.map((d, i) => ({ x: d.x, y: smoothedDifficultyY[i] }));
+
+        datasets.push({
+            label: `${type}_predicted`,
+            data: smoothedIntensityData,
+            borderColor: workoutMapping[type].color,
+            backgroundColor: `${workoutMapping[type].color}80`, // with alpha
+            tension: 0.4 // Increased tension for smoother curves
+        });
+        datasets.push({
+            label: `${type}_perceived`,
+            data: smoothedDifficultyData,
+            borderColor: workoutMapping[type].color,
+            backgroundColor: `${workoutMapping[type].color}80`,
+            borderDash: workoutMapping[type].dashStyle, // Use the style from mapping
+            tension: 0.4 // Increased tension for smoother curves
+        });
+    }
+
+    renderIntensityDifficultyChart(datasets);
+}
+
+/**
+ * Normalizes an array of numbers to a range of 0-1.
+ * @param {number[]} data - The input data.
+ * @returns {number[]} The normalized data.
+ */
+function normalizeData(data) {
+    if (data.length === 0) return [];
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    if (max === min) {
+        return data.map(() => 0.5); // If all values are the same, return 0.5 for all
+    }
+    return data.map(val => (val - min) / (max - min));
+}
+
 
 
 /**
