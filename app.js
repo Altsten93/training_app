@@ -868,8 +868,8 @@ function renderIntensityDifficultyChart(datasets, axisMin, axisMax) {
                     }
                 },
                 y: {
-                    min: -1,
-                    max: 1,
+                    min: -1.5,
+                    max: 1.5,
                     ticks: {
                         color: 'white'
                     }
@@ -893,7 +893,8 @@ function renderIntensityDifficultyChart(datasets, axisMin, axisMax) {
                     }
                 }
             },
-            responsive: true
+            responsive: true,
+            maintainAspectRatio: false
         }
     });
 }
@@ -1012,7 +1013,8 @@ function prepareIntensityDifficultyChartData() {
             borderColor: workoutMapping[type].color,
             backgroundColor: `${workoutMapping[type].color}80`,
             borderDash: workoutMapping[type].dashStyle, // Keep the varied style
-            tension: 0.4
+            tension: 0.4,
+            borderWidth: 2
         });
     }
 
@@ -1026,7 +1028,7 @@ function prepareIntensityDifficultyChartData() {
         // Dataset for the top of the green fill area (invisible line)
         boundaryDatasets.push({
             label: 'Fill Top Boundary', // Hidden
-            data: [{x: axisMin, y: 1}, {x: axisMax, y: 1}],
+            data: [{x: axisMin, y: 1.5}, {x: axisMax, y: 1.5}],
             borderColor: 'transparent',
             backgroundColor: 'rgba(72, 187, 120, 0.15)', // Light green
             pointRadius: 0,
@@ -1039,7 +1041,7 @@ function prepareIntensityDifficultyChartData() {
             label: 'Increase Threshold', // Hidden
             data: [{x: axisMin, y: 0.2}, {x: axisMax, y: 0.2}],
             borderColor: 'rgba(72, 187, 120, 0.7)',
-            borderWidth: 2,
+            borderWidth: 1.5,
             pointRadius: 0,
             tension: 0,
             fill: false
@@ -1050,7 +1052,7 @@ function prepareIntensityDifficultyChartData() {
             label: 'Fatigue Threshold', // Hidden
             data: [{x: axisMin, y: -0.6}, {x: axisMax, y: -0.6}],
             borderColor: 'rgba(245, 101, 101, 0.7)',
-            borderWidth: 2,
+            borderWidth: 1.5,
             pointRadius: 0,
             tension: 0,
             fill: 'start', // Fill from this line down to the bottom
