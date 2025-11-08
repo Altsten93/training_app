@@ -838,7 +838,7 @@ let intensityDifficultyChartInstance = null;
  * Renders the intensity vs difficulty chart.
  * @param {object[]} datasets - The chart datasets.
  */
-function renderIntensityDifficultyChart(datasets) {
+function renderIntensityDifficultyChart(datasets, axisMin, axisMax) {
     const ctx = document.getElementById('intensity-difficulty-chart').getContext('2d');
     if (intensityDifficultyChartInstance) {
         intensityDifficultyChartInstance.destroy();
@@ -855,12 +855,20 @@ function renderIntensityDifficultyChart(datasets) {
                     time: {
                         unit: 'week'
                     },
+                    min: axisMin,
+                    max: axisMax,
                     ticks: {
-                        color: 'white'
+                        color: 'white',
+                        maxRotation: 45,
+                        minRotation: 45,
+                        callback: function(value) {
+                            const tickDate = new Date(value);
+                            return `Week ${getWeekNumber(tickDate)}`;
+                        }
                     }
                 },
                 y: {
-                    min: 0,
+                    min: -1,
                     max: 1,
                     ticks: {
                         color: 'white'
@@ -870,7 +878,18 @@ function renderIntensityDifficultyChart(datasets) {
             plugins: {
                 legend: {
                     labels: {
-                        color: 'white'
+                        color: 'white',
+                        filter: function(legendItem) {
+                            // Hide helper datasets from the legend
+                            return !legendItem.text.includes('Threshold') && !legendItem.text.includes('Boundary');
+                        }
+                    }
+                },
+                tooltip: {
+                    filter: function(tooltipItem) {
+                        // Hide tooltips for helper datasets
+                        const label = tooltipItem.dataset.label || '';
+                        return !label.includes('Threshold') && !label.includes('Boundary');
                     }
                 }
             },
@@ -883,25 +902,47 @@ function renderIntensityDifficultyChart(datasets) {
 function prepareIntensityDifficultyChartData() {
     const twoMonthsAgo = new Date();
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+    const today = new Date();
 
     const completedWorkouts = allWorkoutsData.filter(w => {
-        if (w['Completed_workout']?.toLowerCase() !== 'ja' || !w.Datum) {
+        const isCompleted = w['Completed_workout']?.toLowerCase() === 'ja';
+        if (!isCompleted || !w.Datum) {
             return false;
         }
+
         let date;
-        if (w.Datum.includes('/')) {
-            const parts = w.Datum.split('/');
-            date = new Date(parts[2], parts[1] - 1, parts[0]);
-        } else if (w.Datum.includes('-')) {
-            date = new Date(w.Datum);
+        let parsedSuccessfully = false;
+        try {
+            if (w.Datum.includes('/')) {
+                const parts = w.Datum.split('/');
+                if (parts.length === 3) {
+                    // new Date(year, monthIndex, day)
+                    date = new Date(parts[2], parts[1] - 1, parts[0]);
+                    if (!isNaN(date.getTime())) {
+                        parsedSuccessfully = true;
+                    }
+                }
+            } else if (w.Datum.includes('-')) {
+                date = new Date(w.Datum);
+                if (!isNaN(date.getTime())) {
+                    parsedSuccessfully = true;
+                }
+            }
+        } catch (e) {
+            // silent catch
         }
-        return date && date >= twoMonthsAgo;
+
+        if (!parsedSuccessfully) {
+            return false;
+        }
+
+        return date >= twoMonthsAgo;
     });
 
     const workoutMapping = {
-        'Chest': { intensityCol: 'Bänkpress_intensity', difficultyCol: 'Chest_difficulty', color: '#48BB78', dashStyle: [5, 5] },
-        'Back': { intensityCol: 'Deadlift_intensity', difficultyCol: 'Back_difficulty', color: '#F56565', dashStyle: [2, 3] },
-        'Legs': { intensityCol: 'Squat_intensity', difficultyCol: 'Legs_difficulty', color: '#4299E1', dashStyle: [10, 3] }
+        'Chest': { intensityCol: 'Bänkpress_intensity', difficultyCol: 'Chest_difficulty', color: '#FFD700', dashStyle: [5, 5] }, // Gold
+        'Back': { intensityCol: 'Deadlift_intensity', difficultyCol: 'Back_difficulty', color: '#9370DB', dashStyle: [2, 3] },  // MediumPurple
+        'Legs': { intensityCol: 'Squat_intensity', difficultyCol: 'Legs_difficulty', color: '#00BFFF', dashStyle: [10, 3] }   // DeepSkyBlue
     };
 
     const processedData = { Chest: [], Back: [], Legs: [] };
@@ -956,32 +997,71 @@ function prepareIntensityDifficultyChartData() {
         const intensityData = data.map(d => ({ x: d.date, y: d.normalizedIntensity }));
         const difficultyData = data.map(d => ({ x: d.date, y: d.normalizedDifficulty }));
 
-        // Apply rolling average for smoothing
-        const windowSize = 3;
-        const smoothedIntensityY = calculateRollingAverage(intensityData.map(d => d.y), windowSize);
-        const smoothedDifficultyY = calculateRollingAverage(difficultyData.map(d => d.y), windowSize);
-
-        const smoothedIntensityData = intensityData.map((d, i) => ({ x: d.x, y: smoothedIntensityY[i] }));
-        const smoothedDifficultyData = difficultyData.map((d, i) => ({ x: d.x, y: smoothedDifficultyY[i] }));
-
-        datasets.push({
-            label: `${type}_predicted`,
-            data: smoothedIntensityData,
-            borderColor: workoutMapping[type].color,
-            backgroundColor: `${workoutMapping[type].color}80`, // with alpha
-            tension: 0.4 // Increased tension for smoother curves
+        // Calculate raw adaption data (no smoothing)
+        const rawAdaptionData = intensityData.map((intensityPoint, i) => {
+            const difficultyPoint = difficultyData[i];
+            return {
+                x: intensityPoint.x,
+                y: intensityPoint.y - difficultyPoint.y
+            };
         });
+
         datasets.push({
-            label: `${type}_perceived`,
-            data: smoothedDifficultyData,
+            label: `${type}_adaption`,
+            data: rawAdaptionData,
             borderColor: workoutMapping[type].color,
             backgroundColor: `${workoutMapping[type].color}80`,
-            borderDash: workoutMapping[type].dashStyle, // Use the style from mapping
-            tension: 0.4 // Increased tension for smoother curves
+            borderDash: workoutMapping[type].dashStyle, // Keep the varied style
+            tension: 0.4
         });
     }
 
-    renderIntensityDifficultyChart(datasets);
+    // Add threshold lines if there is data
+    const axisMin = twoMonthsAgo;
+    const axisMax = new Date();
+    if (allPoints.length > 1) {
+        // --- Create Boundary and Fill Datasets ---
+        const boundaryDatasets = [];
+
+        // Dataset for the top of the green fill area (invisible line)
+        boundaryDatasets.push({
+            label: 'Fill Top Boundary', // Hidden
+            data: [{x: axisMin, y: 1}, {x: axisMax, y: 1}],
+            borderColor: 'transparent',
+            backgroundColor: 'rgba(72, 187, 120, 0.15)', // Light green
+            pointRadius: 0,
+            fill: '+1', // Fill to the next dataset in the array (the 0.2 line)
+            tension: 0
+        });
+
+        // Green line for "Increase" zone
+        boundaryDatasets.push({
+            label: 'Increase Threshold', // Hidden
+            data: [{x: axisMin, y: 0.2}, {x: axisMax, y: 0.2}],
+            borderColor: 'rgba(72, 187, 120, 0.7)',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0,
+            fill: false
+        });
+
+        // Red line and fill for "Fatigue" zone
+        boundaryDatasets.push({
+            label: 'Fatigue Threshold', // Hidden
+            data: [{x: axisMin, y: -0.6}, {x: axisMax, y: -0.6}],
+            borderColor: 'rgba(245, 101, 101, 0.7)',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0,
+            fill: 'start', // Fill from this line down to the bottom
+            backgroundColor: 'rgba(245, 101, 101, 0.1)' // Light red
+        });
+        
+        // Combine the data and boundary datasets
+        datasets.push(...boundaryDatasets);
+    }
+
+    renderIntensityDifficultyChart(datasets, axisMin, axisMax);
 }
 
 /**
