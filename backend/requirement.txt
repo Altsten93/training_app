@@ -1,0 +1,5 @@
+functions-framework==3.*
+gspread
+pandas
+scikit-learn
+google-auth

@@ -3,7 +3,9 @@ const CONFIG = {
     chest: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=0&single=true&output=csv",
     back: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=1317122870&single=true&output=csv",
     legs: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=1972507766&single=true&output=csv",
-    scriptUrl: "https://script.google.com/macros/s/AKfycbygMk5VLSori47VCZf2LvW9HIJgzN93Rg4XArJ6Rc52-xY7vPUn0WYBWQhYyuFAbWS9/exec"
+    scriptUrl: "https://script.google.com/macros/s/AKfycbygMk5VLSori47VCZf2LvW9HIJgzN93Rg4XArJ6Rc52-xY7vPUn0WYBWQhYyuFAbWS9/exec",
+    // === NEW URL ADDED ===
+    mlModelUrl: "https://workout-brain-155687864714.europe-west1.run.app"
 };
 
 // --- DOM ELEMENTS ---
@@ -36,6 +38,10 @@ document.getElementById('show-stats-btn').addEventListener('click', () => {
     switchView('dashboard-view');
     prepareDashboard();
 });
+
+// === NEW EVENT LISTENER ADDED ===
+document.getElementById('retrain-ml-btn').addEventListener('click', handleRetrainModel);
+// === END OF NEW LISTENER ===
 
 document.getElementById('refresh-data-btn').addEventListener('click', handleFetchData);
 document.getElementById('home-from-completion-btn').addEventListener('click', () => location.reload());
@@ -245,8 +251,10 @@ function findLastCompletedWorkout(workoutGroups) {
     return lastCompleted;
 }
 
+// --- NOTIFICATION FUNCTIONS ---
+
 /**
- * Shows a notification message.
+ * Shows a notification message and reloads the page.
  * @param {string} message - The message to display.
  */
 function showNotification(message) {
@@ -261,6 +269,89 @@ function showNotification(message) {
         location.reload();
     }, 2000); // Hide after 2 seconds and reload
 }
+
+/**
+ * === NEW FUNCTION ADDED ===
+ * Shows a temporary notification message without reloading.
+ * @param {string} message - The message to display.
+ * @param {string} type - 'success' or 'error'.
+ */
+function showTempNotification(message, type = 'success') {
+    const notification = document.getElementById('notification');
+    const notificationMessage = document.getElementById('notification-message');
+    const icon = notification.querySelector('svg');
+
+    // Remove old color classes
+    notification.classList.remove('bg-green-500', 'bg-red-500');
+
+    // Add new color class
+    if (type === 'success') {
+        notification.classList.add('bg-green-500');
+        icon.style.display = 'block'; // Show success checkmark
+    } else {
+        notification.classList.add('bg-red-500');
+        icon.style.display = 'none'; // Hide checkmark on error
+    }
+
+    notificationMessage.innerText = message; // Use innerText to respect newlines
+    notification.classList.remove('hidden');
+
+    setTimeout(() => {
+        notification.classList.add('hidden');
+    }, 4000); // Hide after 4 seconds
+}
+// === END OF NEW FUNCTION ===
+
+
+// --- SERVER INTERACTIONS ---
+
+/**
+ * === NEW FUNCTION ADDED ===
+ * Calls the Google Cloud Function to retrain the ML model.
+ */
+async function handleRetrainModel() {
+    const button = document.getElementById('retrain-ml-btn');
+    // Store the original HTML content of the button to restore it later
+    const originalContent = button.innerHTML;
+    
+    button.disabled = true;
+    // Update button text to show loading state
+    button.innerHTML = `
+        <h2 class="text-2xl font-bold text-white">Retraining...</h2>
+        <p class="text-gray-400">This may take ~10 seconds. Please wait.</p>
+    `;
+    button.classList.add('opacity-70', 'cursor-not-allowed');
+
+    try {
+        const response = await fetch(CONFIG.mlModelUrl, {
+            method: 'POST',
+            mode: 'cors', // Required for cross-domain request
+        });
+
+        const resultText = await response.text();
+
+        if (response.ok) {
+            // Use the new temp notification
+            showTempNotification(`Model Retrained!\nServer says:\n${resultText}`, 'success');
+            // After retraining, we should refresh the local data to get the new ML scores
+            handleFetchData();
+        } else {
+            // If the server responded with an error (e.g., 500)
+            throw new Error(resultText);
+        }
+
+    } catch (error) {
+        console.error("Error retraining model:", error);
+        showTempNotification(`Error: ${error.message}`, 'error');
+    } finally {
+        // Re-enable the button and restore original content
+        button.disabled = false;
+        button.innerHTML = originalContent;
+        button.classList.remove('opacity-70', 'cursor-not-allowed');
+    }
+}
+// === END OF NEW FUNCTION ===
+
 
 /**
  * Marks the current workout as complete and updates the Google Sheet.
@@ -443,9 +534,9 @@ function renderProgressPieChart(completedPercentage, currentWeekVolume, weeklyVo
                                 return data.labels.map(function(label, i) {
                                     const value = data.datasets[0].data[i];
                                                                         return {
-                                                                            text: `${label} (${Math.round(value)} kg)`,
-                                                                                                                    fillStyle: data.datasets[0].backgroundColor[i],
-                                                                                                                    // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0                                        lineWidth: data.datasets[0].borderWidth,
+                                        text: `${label} (${Math.round(value)} kg)`,
+                                                                                fillStyle: data.datasets[0].backgroundColor[i],
+                                                                                // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0                                        lineWidth: data.datasets[0].borderWidth,
                                         hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0
                                         index: i
                                     };
@@ -1151,7 +1242,7 @@ function renderSessionsChart(labels, data) {
 /**
  * Calculates the rolling average of a dataset.
  * @param {number[]} data - The input data.
- * @param {number} windowSize - The size of the rolling window.
+ *img/ @param {number} windowSize - The size of the rolling window.
  * @returns {number[]} The rolling average data.
  */
 function calculateRollingAverage(data, windowSize) {
