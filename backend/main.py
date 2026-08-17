@@ -286,9 +286,13 @@ async def get_dashboard():
     rolling_vol = pivot_vol.rolling(window=6, min_periods=1).mean().round(1)
     
     all_weeks = list(rolling_vol.index)
+    if len(all_weeks) > 12:
+        all_weeks = all_weeks[-12:]
+    rolling_vol = rolling_vol.loc[all_weeks]
+
     volume_datasets = []
     colors = {"Chest": "#48BB78", "Back": "#F56565", "Legs": "#4299E1"}
-    
+
     for w_type in WORKOUT_ORDER:
         data = list(rolling_vol[w_type].values) if w_type in rolling_vol.columns else [0] * len(all_weeks)
         volume_datasets.append({
@@ -307,8 +311,8 @@ async def get_dashboard():
         "data": [int(session_counts.get(w_type, 0)) for w_type in WORKOUT_ORDER]
     }
 
-    # --- 4. Adaptionsgraf (Senaste 6 månaderna, för att få med alla grupper med recent data) ---
-    adaption_window_start = now - timedelta(days=180)
+    # --- 4. Adaptionsgraf (Senaste 12 månaderna, för att få med all data som är relevant) ---
+    adaption_window_start = now - timedelta(days=365)
     recent_df = completed[completed["parsed_date"] >= adaption_window_start].copy()
     
     adaption_mapping = {

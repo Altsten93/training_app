@@ -28,6 +28,21 @@
         #completion-view span {
             color: white !important;
         }
+        .chart-panel {
+            position: relative;
+            height: 340px;
+            width: 100%;
+            min-height: 260px;
+            max-height: 420px;
+        }
+        .chart-panel canvas {
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
+        }
+        #dashboard-view canvas {
+            max-width: 100%;
+        }
 
         #difficulty-slider {
             -webkit-appearance: none;
@@ -132,11 +147,15 @@
             </div>
             <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
                 <h2 class="text-2xl font-bold text-center text-blue-300 mb-4">Weekly Training Volume</h2>
-                <canvas id="volume-chart"></canvas>
+                <div class="chart-panel">
+                    <canvas id="volume-chart"></canvas>
+                </div>
             </div>
             <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
                 <h2 class="text-2xl font-bold text-center text-blue-300 mb-4">Total Sessions per Exercise</h2>
-                <canvas id="sessions-chart"></canvas>
+                <div class="chart-panel">
+                    <canvas id="sessions-chart"></canvas>
+                </div>
             </div>
         </div>
 

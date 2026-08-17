@@ -16,6 +16,35 @@ let chartInstance = null;
 let exerciseChartInstance = null;
 let intensityDifficultyChartInstance = null;
 
+const donutCenterTextPlugin = {
+    id: 'donutCenterText',
+    afterDraw(chart, args, pluginOptions) {
+        if (chart.config.type !== 'doughnut') return;
+
+        const { ctx, chartArea } = chart;
+        if (!chartArea) return;
+
+        const total = Number(pluginOptions?.total ?? 0);
+        const goal = Number(pluginOptions?.goal ?? 1);
+        const percent = goal > 0 ? (total / goal) * 100 : 0;
+        const centerX = (chartArea.left + chartArea.right) / 2;
+        const centerY = (chartArea.top + chartArea.bottom) / 2;
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '700 28px Inter, sans-serif';
+        ctx.fillText(`${percent.toFixed(1)}%`, centerX, centerY - 8);
+
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '600 12px Inter, sans-serif';
+        ctx.fillText(`${Math.round(total).toLocaleString()} / ${Math.round(goal).toLocaleString()} kg`, centerX, centerY + 18);
+        ctx.restore();
+    }
+};
+
+Chart.register(donutCenterTextPlugin);
+
 // --- INITIALISERING & EVENT LISTENERS ---
 document.addEventListener('DOMContentLoaded', async () => {
     await loadNextWorkout();
@@ -45,7 +74,7 @@ document.getElementById('submit-difficulty-btn').addEventListener('click', () =>
 
 document.getElementById('retrain-ml-btn').addEventListener('click', handleRetrainModel);
 
-workoutView.addEventListener('click', (e) => {
+workoutView.addEventListener('click', async (e) => {
     const backBtn = e.target.closest('.back-btn');
     const completeBtn = e.target.closest('#complete-btn');
     const skipBtn = e.target.closest('#skip-btn');
@@ -53,6 +82,7 @@ workoutView.addEventListener('click', (e) => {
     if (backBtn) {
         switchView('home-view');
     } else if (completeBtn) {
+        await renderCompletionProgress();
         switchView('completion-view');
     } else if (skipBtn) {
         skipWorkout();
@@ -123,12 +153,7 @@ async function submitWorkoutCompletion(difficulty) {
 
         if (!res.ok) throw new Error("Misslyckades att spara i Google Sheets.");
 
-        const dashboardRes = await fetch(`${API_BASE_URL}/api/dashboard`);
-        const dashboardData = await dashboardRes.json();
-
-        if (!dashboardData.empty) {
-            renderProgressPie(dashboardData.weeklyProgress);
-        }
+        await renderCompletionProgress();
 
         showTempNotification("Träningspasset är sparat!", "success");
         document.getElementById('difficulty-rating-section').style.display = 'none';
@@ -184,19 +209,38 @@ async function loadDashboard() {
     }
 }
 
+async function renderCompletionProgress() {
+    try {
+        const dashboardRes = await fetch(`${API_BASE_URL}/api/dashboard`);
+        const dashboardData = await dashboardRes.json();
+        if (!dashboardData.empty) {
+            renderProgressPie(dashboardData.weeklyProgress);
+        }
+    } catch (err) {
+        console.error('Completion chart error:', err);
+    }
+}
+
 function renderProgressPie(progress) {
     const ctx = document.getElementById('progress-pie-chart')?.getContext('2d');
     if (!ctx) return;
     if (progressPieChartInstance) progressPieChartInstance.destroy();
 
+    const totalVolume = Number(progress.currentWeekVolume ?? Object.values(progress.volumeByType ?? {}).reduce((sum, value) => sum + Number(value || 0), 0));
+    const goalVolume = Number(progress.weeklyGoal ?? 12000);
     const colors = { Chest: '#48BB78', Back: '#F56565', Legs: '#4299E1' };
-    const labels = Object.keys(progress.volumeByType).filter(k => progress.volumeByType[k] > 0);
-    const dataValues = labels.map(k => progress.volumeByType[k]);
-    const bgColors = labels.map(k => colors[k]);
+
+    const labels = Object.keys(progress.volumeByType || {})
+        .filter(k => (progress.volumeByType[k] ?? 0) > 0)
+        .map(k => k);
+    const dataValues = Object.keys(progress.volumeByType || {})
+        .filter(k => (progress.volumeByType[k] ?? 0) > 0)
+        .map(k => Number(progress.volumeByType[k] || 0));
+    const bgColors = labels.map(label => colors[label] || '#4A5568');
 
     if (progress.remaining > 0) {
         labels.push('Remaining');
-        dataValues.push(progress.remaining);
+        dataValues.push(Number(progress.remaining || 0));
         bgColors.push('#4A5568');
     }
 
@@ -209,8 +253,16 @@ function renderProgressPie(progress) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            cutout: '70%',
-            plugins: { legend: { display: true, position: 'bottom', labels: { color: 'white' } } }
+            cutout: '72%',
+            plugins: {
+                legend: { display: true, position: 'bottom', labels: { color: 'white', usePointStyle: true } },
+                tooltip: {
+                    callbacks: {
+                        label: (context) => `${context.label}: ${Number(context.parsed).toLocaleString()} kg`
+                    }
+                },
+                donutCenterText: { total: totalVolume, goal: goalVolume }
+            }
         }
     });
 }
@@ -261,14 +313,21 @@ function renderDashboardPie(progress) {
     if (!ctx) return;
     if (dashboardProgressPieChartInstance) dashboardProgressPieChartInstance.destroy();
 
+    const totalVolume = Number(progress.currentWeekVolume ?? Object.values(progress.volumeByType ?? {}).reduce((sum, value) => sum + Number(value || 0), 0));
+    const goalVolume = Number(progress.weeklyGoal ?? 12000);
     const colors = { Chest: '#48BB78', Back: '#F56565', Legs: '#4299E1' };
-    const labels = Object.keys(progress.volumeByType).filter(k => progress.volumeByType[k] > 0);
-    const dataValues = labels.map(k => progress.volumeByType[k]);
-    const bgColors = labels.map(k => colors[k]);
+
+    const labels = Object.keys(progress.volumeByType || {})
+        .filter(k => (progress.volumeByType[k] ?? 0) > 0)
+        .map(k => k);
+    const dataValues = Object.keys(progress.volumeByType || {})
+        .filter(k => (progress.volumeByType[k] ?? 0) > 0)
+        .map(k => Number(progress.volumeByType[k] || 0));
+    const bgColors = labels.map(label => colors[label] || '#4A5568');
 
     if (progress.remaining > 0) {
         labels.push('Remaining');
-        dataValues.push(progress.remaining);
+        dataValues.push(Number(progress.remaining || 0));
         bgColors.push('#4A5568');
     }
 
@@ -281,8 +340,16 @@ function renderDashboardPie(progress) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            cutout: '70%',
-            plugins: { legend: { display: true, position: 'bottom', labels: { color: 'white' } } }
+            cutout: '72%',
+            plugins: {
+                legend: { display: true, position: 'bottom', labels: { color: 'white', usePointStyle: true } },
+                tooltip: {
+                    callbacks: {
+                        label: (context) => `${context.label}: ${Number(context.parsed).toLocaleString()} kg`
+                    }
+                },
+                donutCenterText: { total: totalVolume, goal: goalVolume }
+            }
         }
     });
 }
@@ -290,33 +357,49 @@ function renderDashboardPie(progress) {
 function renderVolumeChart(labels, datasets) {
     const ctx = document.getElementById('volume-chart')?.getContext('2d');
     if (!ctx) return;
+
+    const recentLabels = labels.length > 12 ? labels.slice(-12) : labels;
+    const recentDatasets = datasets.map(ds => ({
+        ...ds,
+        data: ds.data.length > 12 ? ds.data.slice(-12) : ds.data
+    }));
+
+    const maxValue = Math.max(0, ...recentDatasets.flatMap(ds => ds.data));
+    const yMax = Math.max(1000, Math.ceil(maxValue / 1000) * 1000);
+
     if (chartInstance) chartInstance.destroy();
     chartInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels, datasets },
+        data: { labels: recentLabels, datasets: recentDatasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: false,
             interaction: { mode: 'nearest', intersect: false },
             plugins: {
-                legend: { display: true, position: 'top', labels: { color: 'white' } }
+                legend: { display: true, position: 'top', labels: { color: 'white' } },
+                tooltip: { enabled: false }
             },
             elements: {
-                point: { radius: 0, hoverRadius: 3 },
-                line: { tension: 0.25, borderWidth: 2 }
+                point: { radius: 2, hoverRadius: 4 },
+                line: { tension: 0.2, borderWidth: 2, spanGaps: false }
             },
             scales: {
                 x: {
                     ticks: {
                         color: 'white',
-                        autoSkip: true,
-                        maxTicksLimit: 8
+                        autoSkip: false,
+                        maxTicksLimit: 12
                     },
                     grid: { color: 'rgba(255,255,255,0.08)' }
                 },
                 y: {
                     beginAtZero: true,
-                    ticks: { color: 'white' },
+                    suggestedMax: yMax,
+                    ticks: {
+                        color: 'white',
+                        callback: (value) => `${Math.round(value / 1000)}k`
+                    },
                     grid: { color: 'rgba(255,255,255,0.08)' }
                 }
             }
@@ -340,7 +423,22 @@ function renderSessionsChart(labels, data) {
                 borderWidth: 1
             }]
         },
-        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: 'white' },
+                    grid: { color: 'rgba(255,255,255,0.08)' }
+                },
+                x: {
+                    ticks: { color: 'white' },
+                    grid: { color: 'rgba(255,255,255,0.08)' }
+                }
+            }
+        }
     });
 }
 
@@ -373,7 +471,10 @@ function renderAdaptionChart(datasets, minDate, maxDate) {
                     grid: { color: 'rgba(255,255,255,0.08)' }
                 }
             },
-            plugins: { legend: { position: 'top', labels: { color: 'white' } } }
+            plugins: {
+                legend: { position: 'top', labels: { color: 'white' } },
+                tooltip: { enabled: false }
+            }
         }
     });
 }
