@@ -307,9 +307,9 @@ async def get_dashboard():
         "data": [int(session_counts.get(w_type, 0)) for w_type in WORKOUT_ORDER]
     }
 
-    # --- 4. Adaptionsgraf (Senaste 2 månaderna) ---
-    two_months_ago = now - timedelta(days=60)
-    recent_df = completed[completed["parsed_date"] >= two_months_ago].copy()
+    # --- 4. Adaptionsgraf (Senaste 6 månaderna, för att få med alla grupper med recent data) ---
+    adaption_window_start = now - timedelta(days=180)
+    recent_df = completed[completed["parsed_date"] >= adaption_window_start].copy()
     
     adaption_mapping = {
         "Chest": {"intensity": "Bänkpress_intensity", "difficulty": "Chest_difficulty", "color": "#FFD700", "dash": [5, 5]},
@@ -381,7 +381,7 @@ async def get_dashboard():
         "sessionsChart": sessions_data,
         "adaptionChart": {
             "datasets": adaption_datasets,
-            "minDate": two_months_ago.strftime("%Y-%m-%d"),
+            "minDate": adaption_window_start.strftime("%Y-%m-%d"),
             "maxDate": now.strftime("%Y-%m-%d")
         }
     }

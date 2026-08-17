@@ -17,8 +17,9 @@ let exerciseChartInstance = null;
 let intensityDifficultyChartInstance = null;
 
 // --- INITIALISERING & EVENT LISTENERS ---
-document.addEventListener('DOMContentLoaded', () => {
-    loadNextWorkout();
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadNextWorkout();
+    await loadDashboard();
 });
 
 document.getElementById('show-workout-btn').addEventListener('click', () => {
@@ -121,7 +122,14 @@ async function submitWorkoutCompletion(difficulty) {
         });
 
         if (!res.ok) throw new Error("Misslyckades att spara i Google Sheets.");
-        
+
+        const dashboardRes = await fetch(`${API_BASE_URL}/api/dashboard`);
+        const dashboardData = await dashboardRes.json();
+
+        if (!dashboardData.empty) {
+            renderProgressPie(dashboardData.weeklyProgress);
+        }
+
         showTempNotification("Träningspasset är sparat!", "success");
         document.getElementById('difficulty-rating-section').style.display = 'none';
         document.getElementById('home-from-completion-btn').style.display = 'block';
@@ -157,7 +165,7 @@ async function loadDashboard() {
     try {
         const res = await fetch(`${API_BASE_URL}/api/dashboard`);
         const data = await res.json();
-        
+
         if (data.empty) return;
 
         // 1. Veckomål Progress Pie (Dashboard)
@@ -174,6 +182,37 @@ async function loadDashboard() {
     } catch (err) {
         console.error("Dashboard error:", err);
     }
+}
+
+function renderProgressPie(progress) {
+    const ctx = document.getElementById('progress-pie-chart')?.getContext('2d');
+    if (!ctx) return;
+    if (progressPieChartInstance) progressPieChartInstance.destroy();
+
+    const colors = { Chest: '#48BB78', Back: '#F56565', Legs: '#4299E1' };
+    const labels = Object.keys(progress.volumeByType).filter(k => progress.volumeByType[k] > 0);
+    const dataValues = labels.map(k => progress.volumeByType[k]);
+    const bgColors = labels.map(k => colors[k]);
+
+    if (progress.remaining > 0) {
+        labels.push('Remaining');
+        dataValues.push(progress.remaining);
+        bgColors.push('#4A5568');
+    }
+
+    progressPieChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{ data: dataValues, backgroundColor: bgColors, borderWidth: 0 }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: { legend: { display: true, position: 'bottom', labels: { color: 'white' } } }
+        }
+    });
 }
 
 // --- UI RENDERING ---
@@ -255,7 +294,33 @@ function renderVolumeChart(labels, datasets) {
     chartInstance = new Chart(ctx, {
         type: 'line',
         data: { labels, datasets },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: false },
+            plugins: {
+                legend: { display: true, position: 'top', labels: { color: 'white' } }
+            },
+            elements: {
+                point: { radius: 0, hoverRadius: 3 },
+                line: { tension: 0.25, borderWidth: 2 }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: 'white',
+                        autoSkip: true,
+                        maxTicksLimit: 8
+                    },
+                    grid: { color: 'rgba(255,255,255,0.08)' }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: 'white' },
+                    grid: { color: 'rgba(255,255,255,0.08)' }
+                }
+            }
+        }
     });
 }
 
@@ -283,18 +348,32 @@ function renderAdaptionChart(datasets, minDate, maxDate) {
     const ctx = document.getElementById('intensity-difficulty-chart')?.getContext('2d');
     if (!ctx) return;
     if (intensityDifficultyChartInstance) intensityDifficultyChartInstance.destroy();
-    
+
     intensityDifficultyChartInstance = new Chart(ctx, {
         type: 'line',
         data: { datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: false },
+            elements: { point: { radius: 2, hoverRadius: 4 }, line: { tension: 0.3, borderWidth: 2 } },
             scales: {
-                x: { type: 'time', time: { unit: 'week' }, min: minDate, max: maxDate, ticks: { color: 'white' } },
-                y: { min: -1.5, max: 1.5, ticks: { color: 'white' } }
+                x: {
+                    type: 'time',
+                    time: { unit: 'week' },
+                    min: minDate,
+                    max: maxDate,
+                    ticks: { color: 'white', autoSkip: true, maxTicksLimit: 8 },
+                    grid: { color: 'rgba(255,255,255,0.08)' }
+                },
+                y: {
+                    min: -1.5,
+                    max: 1.5,
+                    ticks: { color: 'white' },
+                    grid: { color: 'rgba(255,255,255,0.08)' }
+                }
             },
-            plugins: { legend: { labels: { color: 'white' } } }
+            plugins: { legend: { position: 'top', labels: { color: 'white' } } }
         }
     });
 }
