@@ -1,0 +1,23 @@
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Project-generated / local data files
+*.log
+*.tmp
+*.bak
+*.csv
+*.xlsx
+*.xls
+
+# Keep source files tracked, but ignore local working data
+# Uncomment if you want to track the CSV/XLSX files later:
+# !Träningsschema*.csv
+# !*.csv
