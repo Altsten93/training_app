@@ -45,11 +45,15 @@ document.getElementById('submit-difficulty-btn').addEventListener('click', () =>
 document.getElementById('retrain-ml-btn').addEventListener('click', handleRetrainModel);
 
 workoutView.addEventListener('click', (e) => {
-    if (e.target.classList.contains('back-btn')) {
+    const backBtn = e.target.closest('.back-btn');
+    const completeBtn = e.target.closest('#complete-btn');
+    const skipBtn = e.target.closest('#skip-btn');
+
+    if (backBtn) {
         switchView('home-view');
-    } else if (e.target.id === 'complete-btn') {
+    } else if (completeBtn) {
         switchView('completion-view');
-    } else if (e.target.id === 'skip-btn') {
+    } else if (skipBtn) {
         skipWorkout();
     }
 });
@@ -67,7 +71,9 @@ function switchView(viewId) {
 // --- API-ANROP ---
 
 /** Hämtar nästa träningspass från FastAPI */
-async function loadNextWorkout(groupIndex = null) {
+async function loadNextWorkout(groupIndex = null, options = {}) {
+    const { returnToHome = true } = options;
+
     try {
         switchView('loader-view');
         const url = groupIndex !== null 
@@ -81,17 +87,20 @@ async function loadNextWorkout(groupIndex = null) {
         currentGroupIndex = currentWorkoutData.groupIndex;
         
         renderWorkoutScreen(currentWorkoutData);
-        switchView('home-view');
+        if (returnToHome) {
+            switchView('home-view');
+        } else {
+            switchView('workout-view');
+        }
     } catch (err) {
         showError(err.message);
     }
 }
 
 /** Byter till nästa muskelgrupp (Chest -> Back -> Legs) */
-function skipWorkout() {
+async function skipWorkout() {
     currentGroupIndex = (currentGroupIndex + 1) % 3;
-    loadNextWorkout(currentGroupIndex);
-    switchView('workout-view');
+    await loadNextWorkout(currentGroupIndex, { returnToHome: false });
 }
 
 /** Slutför träningspass och sparar i Google Sheets via FastAPI */
