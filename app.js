@@ -1,49 +1,36 @@
-// --- CONFIGURATION ---
-const CONFIG = {
-    chest: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=0&single=true&output=csv",
-    back: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=1317122870&single=true&output=csv",
-    legs: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZEwzPvfWQhcYGCjEShCyYoSSelbrQkTI7Mu6hVRgw190wDS0o84OQjTOSWdxje62AJ62bCMOVpSI7/pub?gid=1972507766&single=true&output=csv",
-    scriptUrl: "https://script.google.com/macros/s/AKfycbygMk5VLSori47VCZf2LvW9HIJgzN93Rg4XArJ6Rc52-xY7vPUn0WYBWQhYyuFAbWS9/exec",
-    // === NEW URL ADDED ===
-    mlModelUrl: "https://workout-brain-155687864714.europe-west1.run.app"
-};
+// --- KONFIGURATION ---
+// Ändra till din publika backend-URL när du deployar till Cloud Run / Render
+const API_BASE_URL = "http://127.0.0.1:8000";
 
-// --- DOM ELEMENTS ---
+// --- DOM ELEMENT ---
 const views = document.querySelectorAll('.view');
 const workoutView = document.getElementById('workout-view');
 const errorMessage = document.getElementById('error-message');
 
 // --- STATE ---
-let allWorkoutsData = [];
-let nextWorkoutData = null;
+let currentWorkoutData = null;
+let currentGroupIndex = 0;
+let dashboardProgressPieChartInstance = null;
+let progressPieChartInstance = null;
 let chartInstance = null;
 let exerciseChartInstance = null;
-let progressPieChartInstance = null;
-let dashboardProgressPieChartInstance = null;
-let workoutSkipOffset = -1;
-let currentWorkoutGroupIndex = 0;
+let intensityDifficultyChartInstance = null;
 
-// --- INITIALIZATION ---
-document.addEventListener('DOMContentLoaded', handleFetchData);
-
-// --- EVENT LISTENERS ---
+// --- INITIALISERING & EVENT LISTENERS ---
+document.addEventListener('DOMContentLoaded', () => {
+    loadNextWorkout();
+});
 
 document.getElementById('show-workout-btn').addEventListener('click', () => {
-    workoutSkipOffset = 0;
-    updateWorkoutView();
     switchView('workout-view');
 });
 
 document.getElementById('show-stats-btn').addEventListener('click', () => {
     switchView('dashboard-view');
-    prepareDashboard();
+    loadDashboard();
 });
 
-// === NEW EVENT LISTENER ADDED ===
-document.getElementById('retrain-ml-btn').addEventListener('click', handleRetrainModel);
-// === END OF NEW LISTENER ===
-
-document.getElementById('refresh-data-btn').addEventListener('click', handleFetchData);
+document.getElementById('refresh-data-btn').addEventListener('click', () => loadNextWorkout(currentGroupIndex));
 document.getElementById('home-from-completion-btn').addEventListener('click', () => location.reload());
 
 document.getElementById('difficulty-slider').addEventListener('input', (e) => {
@@ -51,16 +38,17 @@ document.getElementById('difficulty-slider').addEventListener('input', (e) => {
 });
 
 document.getElementById('submit-difficulty-btn').addEventListener('click', () => {
-    const difficulty = document.getElementById('difficulty-slider').value;
-    markWorkoutComplete(difficulty);
+    const difficulty = parseFloat(document.getElementById('difficulty-slider').value);
+    submitWorkoutCompletion(difficulty);
 });
 
+document.getElementById('retrain-ml-btn').addEventListener('click', handleRetrainModel);
 
 workoutView.addEventListener('click', (e) => {
     if (e.target.classList.contains('back-btn')) {
         switchView('home-view');
     } else if (e.target.id === 'complete-btn') {
-        showCompletionScreen();
+        switchView('completion-view');
     } else if (e.target.id === 'skip-btn') {
         skipWorkout();
     }
@@ -70,1137 +58,201 @@ document.querySelectorAll('.back-btn').forEach(btn => {
     btn.addEventListener('click', () => switchView('home-view'));
 });
 
-// --- VIEW MANAGEMENT ---
-
-/**
- * Switches the active view.
- * @param {string} viewId - The ID of the view to activate.
- */
+// --- NAVIGATION ---
 function switchView(viewId) {
-    views.forEach(view => view.classList.remove('active'));
+    views.forEach(v => v.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
 }
 
-// --- DATA FETCHING AND PROCESSING ---
+// --- API-ANROP ---
 
-/**
- * Fetches all workout data from the Google Sheets.
- */
-async function handleFetchData() {
+/** Hämtar nästa träningspass från FastAPI */
+async function loadNextWorkout(groupIndex = null) {
     try {
-        workoutSkipOffset = -1;
         switchView('loader-view');
-        const [chestData, backData, legsData] = await Promise.all([
-            fetchSheet(CONFIG.chest, 'Chest'),
-            fetchSheet(CONFIG.back, 'Back'),
-            fetchSheet(CONFIG.legs, 'Legs')
-        ]);
+        const url = groupIndex !== null 
+            ? `${API_BASE_URL}/api/workout/next?group_index=${groupIndex}` 
+            : `${API_BASE_URL}/api/workout/next`;
+            
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Kunde inte hämta pass från servern.");
         
-        allWorkoutsData = [...chestData, ...backData, ...legsData];
-
-        const workoutGroups = [chestData, backData, legsData];
-        let lastCompletedDates = [];
-
-        for (const group of workoutGroups) {
-            let lastDate = null;
-            for (const workout of group) {
-                if (workout['Completed_workout']?.toLowerCase() === 'ja' && workout.Datum) {
-                    const parts = workout.Datum.split('/');
-                    const workoutDate = new Date(parts[2], parts[1] - 1, parts[0]);
-                    if (!lastDate || workoutDate > lastDate) {
-                        lastDate = workoutDate;
-                    }
-                }
-            }
-            lastCompletedDates.push({ group, lastDate });
-        }
-
-        lastCompletedDates.sort((a, b) => {
-            if (!a.lastDate) return -1; // Groups with no completed workouts first
-            if (!b.lastDate) return 1;
-            return a.lastDate - b.lastDate;
-        });
-
-        const workoutGroupOrder = ['Chest', 'Back', 'Legs'];
-        const leastRecentGroup = lastCompletedDates[0].group[0].workoutType;
-        currentWorkoutGroupIndex = workoutGroupOrder.indexOf(leastRecentGroup);
-
-        prepareDashboard();
+        currentWorkoutData = await res.json();
+        currentGroupIndex = currentWorkoutData.groupIndex;
         
+        renderWorkoutScreen(currentWorkoutData);
         switchView('home-view');
-    } catch (error) {
-        console.error("Fetch Error:", error);
-        showError(error.message || "An unknown error occurred.");
+    } catch (err) {
+        showError(err.message);
     }
 }
 
-/**
- * Fetches and parses a single CSV sheet.
- * @param {string} url - The URL of the CSV file.
- * @param {string} type - The type of workout.
- * @returns {Promise<object[]>} A promise that resolves to an array of workout objects.
- */
-async function fetchSheet(url, type) {
-    console.log(`Fetching ${type} data from: ${url}`);
-    const response = await fetch(`${url}&_=${new Date().getTime()}`);
-    if (!response.ok) throw new Error(`Failed to fetch ${type} sheet.`);
-    const text = await response.text();
-    console.log(`Raw response for ${type}:`, text);
-    
-    const lines = text.trim().split('\n');
-    if (lines.length < 2) return []; 
-    
-    const headers = lines[0].split(',').map(h => h.trim());
-    const data = [];
-
-    for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(v => v.trim());
-        if (values.length === headers.length) {
-            let row = { 
-                workoutType: type,
-                originalRowIndex: i + 1 // Crucial for updating the correct row
-            };
-            headers.forEach((header, index) => {
-                row[header] = values[index];
-            });
-            data.push(row);
-        }
-    }
-    console.log(`Parsed ${type} data:`, data);
-    return data;
+/** Byter till nästa muskelgrupp (Chest -> Back -> Legs) */
+function skipWorkout() {
+    currentGroupIndex = (currentGroupIndex + 1) % 3;
+    loadNextWorkout(currentGroupIndex);
+    switchView('workout-view');
 }
 
+/** Slutför träningspass och sparar i Google Sheets via FastAPI */
+async function submitWorkoutCompletion(difficulty) {
+    const btn = document.getElementById('submit-difficulty-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sparar...';
 
+    try {
+        const res = await fetch(`${API_BASE_URL}/api/workout/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                workoutType: currentWorkoutData.workoutType,
+                originalRowIndex: currentWorkoutData.originalRowIndex,
+                difficulty: difficulty
+            })
+        });
 
-function findNextWorkout(workoutGroups, offset = 0) {
-    let allWorkouts = [].concat(...workoutGroups);
-    let uncompletedWorkouts = allWorkouts.filter(w => w['Completed_workout']?.toLowerCase() === 'nej');
-
-    // If there are no uncompleted workouts, return null
-    if (uncompletedWorkouts.length === 0) {
-        return null;
+        if (!res.ok) throw new Error("Misslyckades att spara i Google Sheets.");
+        
+        showTempNotification("Träningspasset är sparat!", "success");
+        document.getElementById('difficulty-rating-section').style.display = 'none';
+        document.getElementById('home-from-completion-btn').style.display = 'block';
+    } catch (err) {
+        showTempNotification(err.message, "error");
+        btn.disabled = false;
+        btn.textContent = "Submit Rating";
     }
-
-    // Create a map to store the last completed date for each workout type
-    const lastCompletedDates = {};
-    for (const group of workoutGroups) {
-        let lastDate = null;
-        for (const workout of group) {
-            if (workout['Completed_workout']?.toLowerCase() === 'ja' && workout.Datum) {
-                const parts = workout.Datum.split('/');
-                const workoutDate = new Date(parts[2], parts[1] - 1, parts[0]);
-                if (!lastDate || workoutDate > lastDate) {
-                    lastDate = workoutDate;
-                }
-            }
-        }
-        if(group.length > 0){
-            lastCompletedDates[group[0].workoutType] = lastDate;
-        }
-    }
-
-    // Sort uncompleted workouts
-    uncompletedWorkouts.sort((a, b) => {
-        const aDate = lastCompletedDates[a.workoutType];
-        const bDate = lastCompletedDates[b.workoutType];
-
-        if (!aDate && bDate) return -1;
-        if (aDate && !bDate) return 1;
-        if (!aDate && !bDate) {
-            const typeOrder = { 'Chest': 0, 'Back': 1, 'Legs': 2 };
-            if(typeOrder[a.workoutType] !== typeOrder[b.workoutType]){
-                return typeOrder[a.workoutType] - typeOrder[b.workoutType];
-            }
-            return a.originalRowIndex - b.originalRowIndex;
-        }
-        if (aDate !== bDate) {
-            return aDate - bDate;
-        }
-        return a.originalRowIndex - b.originalRowIndex;
-    });
-
-    return uncompletedWorkouts[offset] || null;
 }
 
-
-
-/**
- * Finds the last completed workout.
- * @param {object[][]} workoutGroups - An array of workout groups.
- * @returns {object|null} The last completed workout object, or null if none are completed.
- */
-function findLastCompletedWorkout(workoutGroups) {
-    let lastCompleted = null;
-    for (const group of workoutGroups) {
-        for (const workout of group) {
-            if (workout['Completed_workout']?.toLowerCase() === 'ja' && workout.Datum) {
-                const parts = workout.Datum.split('/');
-                const workoutDate = new Date(parts[2], parts[1] - 1, parts[0]);
-                if (!lastCompleted) {
-                    lastCompleted = workout;
-                } else {
-                    const lastCompletedParts = lastCompleted.Datum.split('/');
-                    const lastCompletedDate = new Date(lastCompletedParts[2], lastCompletedParts[1] - 1, lastCompletedParts[0]);
-                    if (workoutDate > lastCompletedDate) {
-                        lastCompleted = workout;
-                    }
-                }
-            }
-        }
-    }
-    return lastCompleted;
-}
-
-// --- NOTIFICATION FUNCTIONS ---
-
-/**
- * Shows a notification message and reloads the page.
- * @param {string} message - The message to display.
- */
-function showNotification(message) {
-    const notification = document.getElementById('notification');
-    const notificationMessage = document.getElementById('notification-message');
-
-    notificationMessage.textContent = message;
-    notification.classList.remove('hidden');
-
-    setTimeout(() => {
-        notification.classList.add('hidden');
-        location.reload();
-    }, 2000); // Hide after 2 seconds and reload
-}
-
-/**
- * === NEW FUNCTION ADDED ===
- * Shows a temporary notification message without reloading.
- * @param {string} message - The message to display.
- * @param {string} type - 'success' or 'error'.
- */
-function showTempNotification(message, type = 'success') {
-    const notification = document.getElementById('notification');
-    const notificationMessage = document.getElementById('notification-message');
-    const icon = notification.querySelector('svg');
-
-    // Remove old color classes
-    notification.classList.remove('bg-green-500', 'bg-red-500');
-
-    // Add new color class
-    if (type === 'success') {
-        notification.classList.add('bg-green-500');
-        icon.style.display = 'block'; // Show success checkmark
-    } else {
-        notification.classList.add('bg-red-500');
-        icon.style.display = 'none'; // Hide checkmark on error
-    }
-
-    notificationMessage.innerText = message; // Use innerText to respect newlines
-    notification.classList.remove('hidden');
-
-    setTimeout(() => {
-        notification.classList.add('hidden');
-    }, 4000); // Hide after 4 seconds
-}
-// === END OF NEW FUNCTION ===
-
-
-// --- SERVER INTERACTIONS ---
-
-/**
- * === NEW FUNCTION ADDED ===
- * Calls the Google Cloud Function to retrain the ML model.
- */
+/** Triggar omträning av ML-modellen */
 async function handleRetrainModel() {
-    const button = document.getElementById('retrain-ml-btn');
-    // Store the original HTML content of the button to restore it later
-    const originalContent = button.innerHTML;
-    
-    button.disabled = true;
-    // Update button text to show loading state
-    button.innerHTML = `
-        <h2 class="text-2xl font-bold text-white">Retraining...</h2>
-        <p class="text-gray-400">This may take ~10 seconds. Please wait.</p>
-    `;
-    button.classList.add('opacity-70', 'cursor-not-allowed');
+    const btn = document.getElementById('retrain-ml-btn');
+    const originalContent = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<h2 class="text-2xl font-bold text-white">Retraining...</h2><p class="text-gray-400">Vänligen vänta...</p>`;
 
     try {
-        const response = await fetch(CONFIG.mlModelUrl, {
-            method: 'POST',
-            mode: 'cors', // Required for cross-domain request
-        });
-
-        const resultText = await response.text();
-
-        if (response.ok) {
-            // Use the new temp notification
-            showTempNotification(`Model Retrained!\nServer says:\n${resultText}`, 'success');
-            // After retraining, we should refresh the local data to get the new ML scores
-            handleFetchData();
-        } else {
-            // If the server responded with an error (e.g., 500)
-            throw new Error(resultText);
-        }
-
-    } catch (error) {
-        console.error("Error retraining model:", error);
-        showTempNotification(`Error: ${error.message}`, 'error');
+        const res = await fetch(`${API_BASE_URL}/api/model/retrain`, { method: 'POST' });
+        const data = await res.json();
+        showTempNotification(`Modell omtränad!\n${data.serverMessage || ''}`, 'success');
+        loadNextWorkout(currentGroupIndex);
+    } catch (err) {
+        showTempNotification(`Fel vid omträning: ${err.message}`, 'error');
     } finally {
-        // Re-enable the button and restore original content
-        button.disabled = false;
-        button.innerHTML = originalContent;
-        button.classList.remove('opacity-70', 'cursor-not-allowed');
+        btn.disabled = false;
+        btn.innerHTML = originalContent;
     }
 }
-// === END OF NEW FUNCTION ===
 
-
-/**
- * Marks the current workout as complete and updates the Google Sheet.
- */
-async function markWorkoutComplete(difficulty) {
-    const button = document.getElementById('submit-difficulty-btn');
-    button.disabled = true;
-    button.textContent = 'Updating...';
-
-    const today = new Date();
-    const formattedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-    const payload = {
-        sheetName: nextWorkoutData.workoutType, // Send the full workoutType for the backend to map
-        rowIndex: nextWorkoutData.originalRowIndex,
-        date: formattedDate,
-        difficulty: difficulty
-    };
-
+/** Hämtar all dashboard-data och ritar upp graferna */
+async function loadDashboard() {
     try {
-        const response = await fetch(CONFIG.scriptUrl, {
-            method: 'POST',
-            mode: 'cors', // Important for cross-origin requests
-            body: JSON.stringify(payload),
-        });
-        const result = await response.json();
-        if (result.status === 'success') {
-            showNotification('Workout completed and difficulty recorded!');
-            document.getElementById('difficulty-rating-section').style.display = 'none';
-            document.getElementById('home-from-completion-btn').style.display = 'block';
-        } else {
-            throw new Error(result.message || 'The script returned an error.');
-        }
-    } catch (error) {
-        console.error("Error updating sheet:", error);
-        alert(`Failed to update sheet. Error: ${error.message}`);
-        button.disabled = false;
-        button.textContent = "Submit Rating";
+        const res = await fetch(`${API_BASE_URL}/api/dashboard`);
+        const data = await res.json();
+        
+        if (data.empty) return;
+
+        // 1. Veckomål Progress Pie (Dashboard)
+        renderDashboardPie(data.weeklyProgress);
+
+        // 2. 6-Veckors Volymgraf (Line)
+        renderVolumeChart(data.volumeChart.labels, data.volumeChart.datasets);
+
+        // 3. Totalt antal genomförda pass (Bar)
+        renderSessionsChart(data.sessionsChart.labels, data.sessionsChart.data);
+
+        // 4. Adaptionsgraf
+        renderAdaptionChart(data.adaptionChart.datasets, data.adaptionChart.minDate, data.adaptionChart.maxDate);
+    } catch (err) {
+        console.error("Dashboard error:", err);
     }
-}
-
-
-function showCompletionScreen() {
-    const weeklyGoal = 12000; // 12000 kg
-    const completedWorkouts = allWorkoutsData.filter(w => w['Completed_workout']?.toLowerCase() === 'ja' && w.Datum);
-    const currentWeekNumber = getWeekNumber(new Date());
-    const currentYear = new Date().getFullYear();
-
-    const weeklyVolumeByType = { 'Chest': 0, 'Back': 0, 'Legs': 0 };
-
-    completedWorkouts.forEach(workout => {
-        const dateStr = workout.Datum;
-        let date;
-        if (dateStr.includes('/')) {
-            const parts = dateStr.split('/');
-            date = new Date(parts[2], parts[1] - 1, parts[0]);
-        } else if (dateStr.includes('-')) {
-            date = new Date(dateStr);
-        }
-
-        if (date && getWeekNumber(date) === currentWeekNumber && date.getFullYear() === currentYear) {
-            let workoutVolume = 0;
-            for (const key in workout) {
-                if (key.endsWith('_volym') && workout[key]) {
-                    workoutVolume += parseFloat(workout[key]) || 0;
-                }
-            }
-            if (weeklyVolumeByType[workout.workoutType] !== undefined) {
-                weeklyVolumeByType[workout.workoutType] += workoutVolume;
-            }
-        }
-    });
-
-    // Add the volume of the workout that was just completed
-    let justCompletedVolume = 0;
-    for (const key in nextWorkoutData) {
-        if (key.endsWith('_volym') && nextWorkoutData[key]) {
-            justCompletedVolume += parseFloat(nextWorkoutData[key]) || 0;
-        }
-    }
-    if (weeklyVolumeByType[nextWorkoutData.workoutType] !== undefined) {
-        weeklyVolumeByType[nextWorkoutData.workoutType] += justCompletedVolume;
-    }
-
-    const currentWeekVolume = Object.values(weeklyVolumeByType).reduce((sum, vol) => sum + vol, 0);
-    const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
-    renderProgressPieChart(percentage, currentWeekVolume, weeklyVolumeByType);
-    switchView('completion-view');
-}
-
-function renderProgressPieChart(completedPercentage, currentWeekVolume, weeklyVolumeByType) {
-    const ctx = document.getElementById('progress-pie-chart').getContext('2d');
-    if (progressPieChartInstance) {
-        progressPieChartInstance.destroy();
-    }
-
-    const weeklyGoal = 12000;
-    const remainingVolume = Math.max(0, weeklyGoal - currentWeekVolume);
-
-    const exerciseColors = {
-        'Chest': '#48BB78', // green
-        'Back': '#F56565',  // red
-        'Legs': '#4299E1',  // blue
-    };
-    const exerciseHoverColors = {
-        'Chest': '#38A169',
-        'Back': '#E53E3E',
-        'Legs': '#3182CE',
-    };
-
-    const labels = Object.keys(weeklyVolumeByType).filter(type => weeklyVolumeByType[type] > 0);
-    const dataValues = labels.map(label => weeklyVolumeByType[label]);
-    const backgroundColors = labels.map(label => exerciseColors[label]);
-    const hoverBackgroundColors = labels.map(label => exerciseHoverColors[label]);
-
-    if (remainingVolume > 0) {
-        labels.push('Remaining');
-        dataValues.push(remainingVolume);
-        backgroundColors.push('#4A5568');
-        hoverBackgroundColors.push('#2D3748');
-    }
-
-    console.log('DEBUG: weeklyVolumeByType:', weeklyVolumeByType);
-    console.log('DEBUG: labels:', labels);
-    console.log('DEBUG: dataValues:', dataValues);
-    console.log('DEBUG: backgroundColors:', backgroundColors);
-
-
-    const data = {
-        labels: labels,
-        datasets: [{
-            data: dataValues,
-            backgroundColor: backgroundColors,
-            hoverBackgroundColor: hoverBackgroundColors,
-            borderWidth: 0,
-        }]
-    };
-
-    const centerText = {
-        id: 'centerText',
-        afterDraw(chart, args, options) {
-            const {ctx, chartArea: {left, right, top, bottom, width, height}} = chart;
-            ctx.save();
-            
-            // Main number
-            ctx.font = 'bold 30px Inter';
-            ctx.fillStyle = 'white';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${Math.round(currentWeekVolume)} kg`, width / 2, top + (height / 2) - 10);
-
-            // Percentage
-            ctx.font = '16px Inter';
-            ctx.fillStyle = 'gray';
-            ctx.fillText(`(${completedPercentage.toFixed(1)}%)`, width / 2, top + (height / 2) + 15);
-            
-            ctx.restore();
-        }
-    }
-
-    progressPieChartInstance = new Chart(ctx, {
-        type: 'doughnut',
-        data: data,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: '70%',
-            plugins: {
-                legend: {
-                    display: true, // Enable legend
-                    position: 'bottom',
-                    align: 'center', // Align legend items horizontally
-                    labels: {
-                        color: 'white',
-                        font: {
-                            size: 14,
-                        },
-                        generateLabels: function(chart) {
-                            const data = chart.data;
-                            if (data.labels.length && data.datasets.length) {
-                                return data.labels.map(function(label, i) {
-                                    const value = data.datasets[0].data[i];
-                                                                        return {
-                                        text: `${label} (${Math.round(value)} kg)`,
-                                                                                fillStyle: data.datasets[0].backgroundColor[i],
-                                                                                // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0                                        lineWidth: data.datasets[0].borderWidth,
-                                        hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0
-                                        index: i
-                                    };
-                                });
-                            }
-                            return [];
-                        }
-                    }
-                },
-                tooltip: {
-                    enabled: true,
-                    callbacks: {
-                        label: function(context) {
-                            let label = context.label || '';
-                            if (label) {
-                                label += ': ';
-                            }
-                            if (context.parsed !== null) {
-                                label += Math.round(context.parsed) + ' kg';
-                            }
-                            return label;
-                        }
-                    }
-                }
-            }
-        },
-        plugins: [centerText]
-    });
-}
-
-function renderDashboardProgressPieChart(completedPercentage, currentWeekVolume, weeklyVolumeByType) {
-    const ctx = document.getElementById('dashboard-progress-pie-chart').getContext('2d');
-    if (dashboardProgressPieChartInstance) {
-        dashboardProgressPieChartInstance.destroy();
-    }
-
-    const weeklyGoal = 12000;
-    const remainingVolume = Math.max(0, weeklyGoal - currentWeekVolume);
-
-    const exerciseColors = {
-        'Chest': '#48BB78', // green
-        'Back': '#F56565',  // red
-        'Legs': '#4299E1',  // blue
-    };
-    const exerciseHoverColors = {
-        'Chest': '#38A169',
-        'Back': '#E53E3E',
-        'Legs': '#3182CE',
-    };
-
-    const labels = Object.keys(weeklyVolumeByType).filter(type => weeklyVolumeByType[type] > 0);
-    const dataValues = labels.map(label => weeklyVolumeByType[label]);
-    const backgroundColors = labels.map(label => exerciseColors[label]);
-    const hoverBackgroundColors = labels.map(label => exerciseHoverColors[label]);
-
-    if (remainingVolume > 0) {
-        labels.push('Remaining');
-        dataValues.push(remainingVolume);
-        backgroundColors.push('#4A5568');
-        hoverBackgroundColors.push('#2D3748');
-    }
-
-
-    const data = {
-        labels: labels,
-        datasets: [{
-            data: dataValues,
-            backgroundColor: backgroundColors,
-            hoverBackgroundColor: hoverBackgroundColors,
-            borderWidth: 0,
-        }]
-    };
-
-    const centerText = {
-        id: 'centerText',
-        afterDraw(chart, args, options) {
-            const {ctx, chartArea: {left, right, top, bottom, width, height}} = chart;
-            ctx.save();
-            
-            // Main number
-            ctx.font = 'bold 30px Inter';
-            ctx.fillStyle = 'white';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${Math.round(currentWeekVolume)} kg`, width / 2, top + (height / 2) - 10);
-
-            // Percentage
-            ctx.font = '16px Inter';
-            ctx.fillStyle = 'gray';
-            ctx.fillText(`(${completedPercentage.toFixed(1)}%)`, width / 2, top + (height / 2) + 15);
-            
-            ctx.restore();
-        }
-    }
-
-    dashboardProgressPieChartInstance = new Chart(ctx, {
-        type: 'doughnut',
-        data: data,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: '70%',
-            plugins: {
-                legend: {
-                    display: true, // Enable legend
-                    position: 'bottom',
-                    align: 'center', // Align legend items horizontally
-                    labels: {
-                        color: 'white',
-                        font: {
-                            size: 14,
-                        },
-                        generateLabels: function(chart) {
-                            const data = chart.data;
-                            if (data.labels.length && data.datasets.length) {
-                                return data.labels.map(function(label, i) {
-                                    const value = data.datasets[0].data[i];
-                                    return {
-                                        text: `${label} (${Math.round(value)} kg)`,
-                                        fillStyle: data.datasets[0].backgroundColor[i],
-                                        fontColor: 'white', // <-- ADD THIS LINE,
-                                        // strokeStyle: data.datasets[0].borderColor[i], // Removed as borderColor is undefined and borderWidth is 0
-                                        lineWidth: data.datasets[0].borderWidth,
-                                        hidden: !chart.isDatasetVisible(0) || data.labels[i] === 'Remaining' && value === 0, // Hide 'Remaining' if 0,
-                                        index: i
-                                    };
-                                });
-                            }
-                            return [];
-                        }
-                    }
-                },
-                tooltip: {
-                    enabled: true,
-                    callbacks: {
-                        label: function(context) {
-                            let label = context.label || '';
-                            if (label) {
-                                label += ': ';
-                            }
-                            if (context.parsed !== null) {
-                                label += Math.round(context.parsed) + ' kg';
-                            }
-                            return label;
-                        }
-                    }
-                }
-            }
-        },
-        plugins: [centerText]
-    });
 }
 
 // --- UI RENDERING ---
 
-function updateWorkoutView() {
-    const workoutGroupOrder = ['Chest', 'Back', 'Legs'];
-    const currentGroup = workoutGroupOrder[currentWorkoutGroupIndex];
-    const workoutsInGroup = allWorkoutsData.filter(w => w.workoutType === currentGroup && w['Completed_workout']?.toLowerCase() === 'nej');
+function renderWorkoutScreen(data) {
+    workoutView.innerHTML = `
+        <button class="back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Home</button>
+        ${data.allCompleted ? `
+            <div class="bg-gray-800 p-6 rounded-2xl text-center">
+                <p class="text-xl font-bold text-green-400">Alla pass i denna kategori är klara!</p>
+            </div>
+        ` : `
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700">
+                <h2 class="text-2xl font-bold text-center text-blue-300">Next Up: ${data.workoutType}</h2>
+                <p class="text-center text-gray-400 mb-6">${data.message}</p>
+                
+                <div class="space-y-3">
+                    ${data.exercises.map(ex => `
+                        <div class="bg-gray-700 p-4 rounded-lg">
+                            <p class="text-lg font-semibold capitalize">${ex.name}</p>
+                            <div class="grid grid-cols-3 gap-4 text-center mt-2">
+                                <div><p class="text-xs text-gray-400">Weight</p><p class="text-xl font-bold text-orange-400">${ex.kg} kg</p></div>
+                                <div><p class="text-xs text-gray-400">Reps</p><p class="text-xl font-bold">${ex.reps}</p></div>
+                                <div><p class="text-xs text-gray-400">Sets</p><p class="text-xl font-bold">${ex.sets}</p></div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
 
-    nextWorkoutData = workoutsInGroup[0] || null;
-    const lastCompletedWorkout = findLastCompletedWorkout([allWorkoutsData.filter(w => w.workoutType === currentGroup)]);
-    displayNextWorkout(nextWorkoutData, lastCompletedWorkout);
+                <div class="mt-8 text-center">
+                    <p class="font-semibold mb-3">Körde du detta pass idag?</p>
+                    <div class="flex justify-center gap-4">
+                        <button id="complete-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Yes, I'm Done!</button>
+                        <button id="skip-btn" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Skip this workout</button>
+                    </div>
+                </div>
+            </div>
+        `}
+    `;
 }
 
-/**This function updates the state-variable with +1 --> pushing us to get the next workout. */
-function skipWorkout() {
-    currentWorkoutGroupIndex = (currentWorkoutGroupIndex + 1) % 3; // Cycle through 0, 1, 2
-    updateWorkoutView();
-}
+// --- GRAFRITNING (Chart.js) ---
 
-/**
- * Displays the next workout information.
- * @param {object} nextWorkout - The data for the next workout.
- * @param {object} lastCompletedWorkout - The data for the last completed workout.
- */
+function renderDashboardPie(progress) {
+    const ctx = document.getElementById('dashboard-progress-pie-chart')?.getContext('2d');
+    if (!ctx) return;
+    if (dashboardProgressPieChartInstance) dashboardProgressPieChartInstance.destroy();
 
-function displayNextWorkout(nextWorkout, lastCompletedWorkout) {
-    console.log('nextWorkout:', nextWorkout);
-    workoutView.innerHTML = ''; // Clear the view
+    const colors = { Chest: '#48BB78', Back: '#F56565', Legs: '#4299E1' };
+    const labels = Object.keys(progress.volumeByType).filter(k => progress.volumeByType[k] > 0);
+    const dataValues = labels.map(k => progress.volumeByType[k]);
+    const bgColors = labels.map(k => colors[k]);
 
-    const backBtn = document.createElement('button');
-    backBtn.className = 'back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300';
-    backBtn.innerHTML = '&larr; Back to Home';
-    workoutView.appendChild(backBtn);
-
-    if (!nextWorkout) {
-        const allCompleted = document.createElement('div');
-        allCompleted.className = 'bg-gray-800 p-6 rounded-2xl text-center';
-        allCompleted.innerHTML = `<p class="text-xl font-bold text-green-400">All workouts completed!</p>`;
-        workoutView.appendChild(allCompleted);
-        return;
+    if (progress.remaining > 0) {
+        labels.push('Remaining');
+        dataValues.push(progress.remaining);
+        bgColors.push('#4A5568');
     }
 
-    let daysSinceLastWorkout = 0;
-    if (lastCompletedWorkout) {
-        const parts = lastCompletedWorkout.Datum.split('/');
-        const lastDate = new Date(parts[2], parts[1] - 1, parts[0]);
-        const today = new Date();
-        const diffTime = Math.abs(today - lastDate);
-        daysSinceLastWorkout = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    }
-
-    let funnyMessage = "";
-    if (lastCompletedWorkout) {
-        if (daysSinceLastWorkout === 0) {
-            funnyMessage = "You trained this today.";
-        } else if (daysSinceLastWorkout === 1) {
-            funnyMessage = "You trained this yesterday.";
-        } else if (daysSinceLastWorkout === 7) {
-            funnyMessage = "You trained this a week ago.";
-        } else if (daysSinceLastWorkout > 9) {
-            funnyMessage = `A wooo, get your fat ass to the gym, it has been ${daysSinceLastWorkout} days ago !!!`;
-        } else if (daysSinceLastWorkout > 0) {
-            funnyMessage = `It has been ${daysSinceLastWorkout} days since your last workout.`;
-        }
-    }
-
-    const container = document.createElement('div');
-    container.className = 'bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700';
-
-    const title = document.createElement('h2');
-    title.className = 'text-2xl font-bold text-center text-blue-300';
-    title.textContent = `Next Up: ${nextWorkout.workoutType}`;
-    container.appendChild(title);
-
-    const message = document.createElement('p');
-    message.className = 'text-center text-gray-400 mb-6';
-    message.textContent = funnyMessage;
-    container.appendChild(message);
-
-    const exercisesContainer = document.createElement('div');
-    exercisesContainer.className = 'space-y-3';
-
-    const exercises = [];
-    for (const key in nextWorkout) {
-        if (key.endsWith('_KG') && nextWorkout[key]) {
-            const baseName = key.replace('_KG', '');
-            exercises.push({
-                name: baseName.replace(/_/g, ' '),
-                kg: nextWorkout[key],
-                reps: nextWorkout[`${baseName}_reps`] || 'N/A',
-                sets: nextWorkout[`${baseName}_set`] || 'N/A'
-            });
-        }
-    }
-
-    exercises.forEach(ex => {
-        const exDiv = document.createElement('div');
-        exDiv.className = 'bg-gray-700 p-4 rounded-lg';
-        exDiv.innerHTML = `
-            <p class="text-lg font-semibold capitalize">${ex.name}</p>
-            <div class="grid grid-cols-3 gap-4 text-center mt-2">
-                <div><p class="text-xs text-gray-400">Weight</p><p class="text-xl font-bold text-orange-400">${ex.kg} kg</p></div>
-                <div><p class="text-xs text-gray-400">Reps</p><p class="text-xl font-bold">${ex.reps}</p></div>
-                <div><p class="text-xs text-gray-400">Sets</p><p class="text-xl font-bold">${ex.sets}</p></div>
-            </div>`;
-        exercisesContainer.appendChild(exDiv);
-    });
-
-    container.appendChild(exercisesContainer);
-
-    const completionDiv = document.createElement('div');
-    completionDiv.className = 'mt-8 text-center';
-    completionDiv.innerHTML = `
-        <p class="font-semibold mb-3">Did you complete this workout today?</p>
-        <div class="flex justify-center gap-4">
-            <button id="complete-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Yes, I'm Done!</button>
-            <button id="skip-btn" class="bg-yellow-600 hover:bg-black-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Skip this workout for now!</button>
-        </div>`;
-    container.appendChild(completionDiv);
-
-    workoutView.appendChild(container);
-}
-
-// --- DASHBOARD ---
-function prepareDashboard() {
-    prepareIntensityDifficultyChartData();
-    const completed = allWorkoutsData.filter(w => w['Completed_workout']?.toLowerCase() === 'ja' && w.Datum);
-    const weeklyVolume = {};
-    const exerciseCounts = {};
-    const firstWorkoutDate = {};
-
-    completed.forEach(workout => {
-        let totalVolume = 0;
-        const dateStr = workout.Datum;
-        let date;
-        if (dateStr.includes('/')) {
-            const parts = dateStr.split('/');
-            date = new Date(parts[2], parts[1] - 1, parts[0]);
-        } else if (dateStr.includes('-')) {
-            date = new Date(dateStr);
-        }
-
-        if (date) {
-            const year = date.getFullYear();
-            const exerciseType = workout.workoutType;
-
-            // Exercise Counts
-            if (!exerciseCounts[exerciseType]) {
-                exerciseCounts[exerciseType] = 0;
-            }
-            exerciseCounts[exerciseType]++;
-
-            // First Workout Date
-            if (!firstWorkoutDate[exerciseType] || date < firstWorkoutDate[exerciseType]) {
-                firstWorkoutDate[exerciseType] = date;
-            }
-
-            for (const key in workout) {
-                if (key.endsWith('_volym') && workout[key]) {
-                    const volume = parseFloat(workout[key]) || 0;
-                    totalVolume += volume;
-                }
-            }
-
-            if (totalVolume > 0) {
-                const weekKey = `${year}-W${getWeekNumber(date)}`;
-                if (!weeklyVolume[exerciseType]) {
-                    weeklyVolume[exerciseType] = {};
-                }
-                weeklyVolume[exerciseType][weekKey] = (weeklyVolume[exerciseType][weekKey] || 0) + totalVolume;
-            }
-        }
-    });
-
-    // Prepare data for weekly volume chart
-    const allWeeks = [...new Set(Object.values(weeklyVolume).flatMap(Object.keys))].sort();
-    const exerciseColors = {
-        'Chest': 'green',
-        'Back': 'red',
-        'Legs': 'blue'
-    };
-
-    const datasets = Object.keys(weeklyVolume).map(exercise => {
-        const data = allWeeks.map(week => weeklyVolume[exercise][week] || 0);
-        const rollingAverageData = calculateRollingAverage(data, 6); // 6-week rolling average
-        return {
-            label: `${exercise} Volume (6-Week Avg)`,
-            data: rollingAverageData,
-            borderColor: exerciseColors[exercise] || `hsl(${Math.random() * 360}, 70%, 50%)`,
-            borderWidth: 1,
-            fill: false,
-            pointRadius: 0
-        };
-    });
-
-    renderChart(allWeeks, datasets);
-
-    // Render Sessions Chart
-    const exerciseLabels = Object.keys(exerciseCounts);
-    const exerciseData = Object.values(exerciseCounts);
-    renderSessionsChart(exerciseLabels, exerciseData);
-
-    // Calculate and display weekly goal progress
-    const weeklyGoal = 12000; // 12000 kg
-    const currentWeekNumber = getWeekNumber(new Date());
-    const currentYear = new Date().getFullYear();
-
-    const weeklyVolumeByType = { 'Chest': 0, 'Back': 0, 'Legs': 0 };
-    completed.forEach(workout => {
-        const dateStr = workout.Datum;
-        let date;
-        if (dateStr.includes('/')) {
-            const parts = dateStr.split('/');
-            date = new Date(parts[2], parts[1] - 1, parts[0]);
-        } else if (dateStr.includes('-')) {
-            date = new Date(dateStr);
-        }
-
-        if (date && getWeekNumber(date) === currentWeekNumber && date.getFullYear() === currentYear) {
-            let workoutVolume = 0;
-            for (const key in workout) {
-                if (key.endsWith('_volym') && workout[key]) {
-                    workoutVolume += parseFloat(workout[key]) || 0;
-                }
-            }
-            if (weeklyVolumeByType[workout.workoutType] !== undefined) {
-                weeklyVolumeByType[workout.workoutType] += workoutVolume;
-            }
-        }
-    });
-    const currentWeekVolume = Object.values(weeklyVolumeByType).reduce((sum, vol) => sum + vol, 0);
-
-    const percentage = Math.min((currentWeekVolume / weeklyGoal) * 100, 100);
-    renderDashboardProgressPieChart(percentage, currentWeekVolume, weeklyVolumeByType);
-}
-
-let intensityDifficultyChartInstance = null;
-/**
- * Renders the intensity vs difficulty chart.
- * @param {object[]} datasets - The chart datasets.
- */
-function renderIntensityDifficultyChart(datasets, axisMin, axisMax) {
-    const ctx = document.getElementById('intensity-difficulty-chart').getContext('2d');
-    if (intensityDifficultyChartInstance) {
-        intensityDifficultyChartInstance.destroy();
-    }
-    intensityDifficultyChartInstance = new Chart(ctx, {
-        type: 'line',
+    dashboardProgressPieChartInstance = new Chart(ctx, {
+        type: 'doughnut',
         data: {
-            datasets: datasets
+            labels: labels,
+            datasets: [{ data: dataValues, backgroundColor: bgColors, borderWidth: 0 }]
         },
         options: {
-            scales: {
-                x: {
-                    type: 'time',
-                    time: {
-                        unit: 'week'
-                    },
-                    min: axisMin,
-                    max: axisMax,
-                    ticks: {
-                        color: 'white',
-                        maxRotation: 45,
-                        minRotation: 45,
-                        callback: function(value) {
-                            const tickDate = new Date(value);
-                            return `Week ${getWeekNumber(tickDate)}`;
-                        }
-                    }
-                },
-                y: {
-                    min: -1.5,
-                    max: 1.5,
-                    ticks: {
-                        color: 'white'
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        color: 'white',
-                        filter: function(legendItem) {
-                            // Hide helper datasets from the legend
-                            return !legendItem.text.includes('Threshold') && !legendItem.text.includes('Boundary');
-                        }
-                    }
-                },
-                tooltip: {
-                    filter: function(tooltipItem) {
-                        // Hide tooltips for helper datasets
-                        const label = tooltipItem.dataset.label || '';
-                        return !label.includes('Threshold') && !label.includes('Boundary');
-                    }
-                }
-            },
             responsive: true,
-            maintainAspectRatio: false
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: { legend: { display: true, position: 'bottom', labels: { color: 'white' } } }
         }
     });
 }
 
-
-function prepareIntensityDifficultyChartData() {
-    const twoMonthsAgo = new Date();
-    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-    const today = new Date();
-
-    const completedWorkouts = allWorkoutsData.filter(w => {
-        const isCompleted = w['Completed_workout']?.toLowerCase() === 'ja';
-        if (!isCompleted || !w.Datum) {
-            return false;
-        }
-
-        let date;
-        let parsedSuccessfully = false;
-        try {
-            if (w.Datum.includes('/')) {
-                const parts = w.Datum.split('/');
-                if (parts.length === 3) {
-                    // new Date(year, monthIndex, day)
-                    date = new Date(parts[2], parts[1] - 1, parts[0]);
-                    if (!isNaN(date.getTime())) {
-                        parsedSuccessfully = true;
-                    }
-                }
-            } else if (w.Datum.includes('-')) {
-                date = new Date(w.Datum);
-                if (!isNaN(date.getTime())) {
-                    parsedSuccessfully = true;
-                }
-            }
-        } catch (e) {
-            // silent catch
-        }
-
-        if (!parsedSuccessfully) {
-            return false;
-        }
-
-        return date >= twoMonthsAgo;
-    });
-
-    const workoutMapping = {
-        'Chest': { intensityCol: 'Bänkpress_intensity', difficultyCol: 'Chest_difficulty', color: '#FFD700', dashStyle: [5, 5] }, // Gold
-        'Back': { intensityCol: 'Deadlift_intensity', difficultyCol: 'Back_difficulty', color: '#9370DB', dashStyle: [2, 3] },  // MediumPurple
-        'Legs': { intensityCol: 'Squat_intensity', difficultyCol: 'Legs_difficulty', color: '#00BFFF', dashStyle: [10, 3] }   // DeepSkyBlue
-    };
-
-    const processedData = { Chest: [], Back: [], Legs: [] };
-
-    for (const workout of completedWorkouts) {
-        const type = workout.workoutType;
-        if (!processedData[type]) continue;
-
-        const mapping = workoutMapping[type];
-        const intensity = parseFloat(workout[mapping.intensityCol]);
-        const difficulty = parseFloat(workout[mapping.difficultyCol]);
-        
-        let date;
-        if (workout.Datum.includes('/')) {
-            const parts = workout.Datum.split('/');
-            date = new Date(parts[2], parts[1] - 1, parts[0]);
-        } else {
-            date = new Date(workout.Datum);
-        }
-
-        if (!isNaN(intensity) && !isNaN(difficulty) && date) {
-            processedData[type].push({ date, intensity, difficulty });
-        }
-    }
-
-    // Create a combined list of all points to normalize them together
-    const allPoints = [].concat(...Object.values(processedData));
-    
-    // Normalize intensities
-    const intensitiesToNormalize = allPoints.map(p => p.intensity);
-    const normalizedIntensities = normalizeData(intensitiesToNormalize);
-    
-    // Normalize difficulties
-    const difficultiesToNormalize = allPoints.map(p => p.difficulty);
-    const normalizedDifficulties = normalizeData(difficultiesToNormalize);
-
-    // Add normalized values back to the points
-    allPoints.forEach((point, index) => {
-        point.normalizedIntensity = normalizedIntensities[index];
-        point.normalizedDifficulty = normalizedDifficulties[index];
-    });
-
-    const datasets = [];
-
-    for (const type in processedData) {
-        const data = processedData[type];
-        if (data.length === 0) continue;
-
-        // Sort data by date
-        data.sort((a, b) => a.date - b.date);
-
-        const intensityData = data.map(d => ({ x: d.date, y: d.normalizedIntensity }));
-        const difficultyData = data.map(d => ({ x: d.date, y: d.normalizedDifficulty }));
-
-        // Calculate raw adaption data (no smoothing)
-        const rawAdaptionData = intensityData.map((intensityPoint, i) => {
-            const difficultyPoint = difficultyData[i];
-            return {
-                x: intensityPoint.x,
-                y: intensityPoint.y - difficultyPoint.y
-            };
-        });
-
-        datasets.push({
-            label: `${type}_adaption`,
-            data: rawAdaptionData,
-            borderColor: workoutMapping[type].color,
-            backgroundColor: `${workoutMapping[type].color}80`,
-            borderDash: workoutMapping[type].dashStyle, // Keep the varied style
-            tension: 0.4,
-            borderWidth: 2
-        });
-    }
-
-    // Add threshold lines if there is data
-    const axisMin = twoMonthsAgo;
-    const axisMax = new Date();
-    if (allPoints.length > 1) {
-        // --- Create Boundary and Fill Datasets ---
-        const boundaryDatasets = [];
-
-        // Dataset for the top of the green fill area (invisible line)
-        boundaryDatasets.push({
-            label: 'Fill Top Boundary', // Hidden
-            data: [{x: axisMin, y: 1.5}, {x: axisMax, y: 1.5}],
-            borderColor: 'transparent',
-            backgroundColor: 'rgba(72, 187, 120, 0.15)', // Light green
-            pointRadius: 0,
-            fill: '+1', // Fill to the next dataset in the array (the 0.2 line)
-            tension: 0
-        });
-
-        // Green line for "Increase" zone
-        boundaryDatasets.push({
-            label: 'Increase Threshold', // Hidden
-            data: [{x: axisMin, y: 0.2}, {x: axisMax, y: 0.2}],
-            borderColor: 'rgba(72, 187, 120, 0.7)',
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0,
-            fill: false
-        });
-
-        // Red line and fill for "Fatigue" zone
-        boundaryDatasets.push({
-            label: 'Fatigue Threshold', // Hidden
-            data: [{x: axisMin, y: -0.6}, {x: axisMax, y: -0.6}],
-            borderColor: 'rgba(245, 101, 101, 0.7)',
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0,
-            fill: 'start', // Fill from this line down to the bottom
-            backgroundColor: 'rgba(245, 101, 101, 0.1)' // Light red
-        });
-        
-        // Combine the data and boundary datasets
-        datasets.push(...boundaryDatasets);
-    }
-
-    renderIntensityDifficultyChart(datasets, axisMin, axisMax);
-}
-
-/**
- * Normalizes an array of numbers to a range of 0-1.
- * @param {number[]} data - The input data.
- * @returns {number[]} The normalized data.
- */
-function normalizeData(data) {
-    if (data.length === 0) return [];
-    const min = Math.min(...data);
-    const max = Math.max(...data);
-    if (max === min) {
-        return data.map(() => 0.5); // If all values are the same, return 0.5 for all
-    }
-    return data.map(val => (val - min) / (max - min));
-}
-
-
-
-/**
- * Renders the weekly volume chart.
- * @param {string[]} labels - The chart labels (weeks).
- * @param {object[]} datasets - The chart datasets.
- */
-function renderChart(labels, datasets) {
-    const ctx = document.getElementById('volume-chart').getContext('2d');
+function renderVolumeChart(labels, datasets) {
+    const ctx = document.getElementById('volume-chart')?.getContext('2d');
+    if (!ctx) return;
     if (chartInstance) chartInstance.destroy();
     chartInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels, datasets }, 
-        options: { scales: { y: { beginAtZero: true } }, responsive: true }
+        data: { labels, datasets },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
     });
 }
 
-
-
-/**
- * Renders the total sessions per exercise chart.
- * @param {string[]} labels - The chart labels (exercise types).
- * @param {number[]} data - The chart data (total sessions).
- */
-
-
-
 function renderSessionsChart(labels, data) {
-    const ctx = document.getElementById('sessions-chart').getContext('2d');
+    const ctx = document.getElementById('sessions-chart')?.getContext('2d');
+    if (!ctx) return;
     if (exerciseChartInstance) exerciseChartInstance.destroy();
     exerciseChartInstance = new Chart(ctx, {
         type: 'bar',
@@ -1209,69 +261,46 @@ function renderSessionsChart(labels, data) {
             datasets: [{
                 label: 'Total Sessions',
                 data: data,
-                backgroundColor: [
-                    'rgba(255, 99, 132, 0.2)',
-                    'rgba(54, 162, 235, 0.2)',
-                    'rgba(255, 206, 86, 0.2)',
-                ],
-                borderColor: [
-                    'rgba(255, 99, 132, 1)',
-                    'rgba(54, 162, 235, 1)',
-                    'rgba(255, 206, 86, 1)',
-                ],
+                backgroundColor: ['rgba(72, 187, 120, 0.5)', 'rgba(245, 101, 101, 0.5)', 'rgba(66, 153, 225, 0.5)'],
+                borderColor: ['#48BB78', '#F56565', '#4299E1'],
                 borderWidth: 1
             }]
         },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    });
+}
+
+function renderAdaptionChart(datasets, minDate, maxDate) {
+    const ctx = document.getElementById('intensity-difficulty-chart')?.getContext('2d');
+    if (!ctx) return;
+    if (intensityDifficultyChartInstance) intensityDifficultyChartInstance.destroy();
+    
+    intensityDifficultyChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: { datasets },
         options: {
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
+            responsive: true,
+            maintainAspectRatio: false,
             scales: {
-                y: {
-                    beginAtZero: true
-                }
-            }
+                x: { type: 'time', time: { unit: 'week' }, min: minDate, max: maxDate, ticks: { color: 'white' } },
+                y: { min: -1.5, max: 1.5, ticks: { color: 'white' } }
+            },
+            plugins: { legend: { labels: { color: 'white' } } }
         }
     });
 }
 
-// --- UTILITY FUNCTIONS ---
-
-/**
- * Calculates the rolling average of a dataset.
- * @param {number[]} data - The input data.
- *img/ @param {number} windowSize - The size of the rolling window.
- * @returns {number[]} The rolling average data.
- */
-function calculateRollingAverage(data, windowSize) {
-    const rollingAverage = [];
-    for (let i = 0; i < data.length; i++) {
-        const window = data.slice(Math.max(0, i - windowSize + 1), i + 1);
-        const average = window.reduce((a, b) => a + b, 0) / window.length;
-        rollingAverage.push(average);
-    }
-    return rollingAverage;
+// --- NOTIFIKATIONER & FEL ---
+function showTempNotification(message, type = 'success') {
+    const notif = document.getElementById('notification');
+    const msg = document.getElementById('notification-message');
+    notif.className = `fixed bottom-4 right-4 p-4 rounded-lg text-white ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
+    msg.innerText = message;
+    notif.classList.remove('hidden');
+    setTimeout(() => notif.classList.add('hidden'), 4000);
 }
 
-/**
- * Gets the ISO week number for a given date.
- * @param {Date} d - The date.
- * @returns {number} The week number.
- */
-function getWeekNumber(d) {
-    d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-}
-
-/**
- * Displays an error message in the error view.
- * @param {string} message - The error message to display.
- */
-function showError(message) {
-    errorMessage.textContent = message;
+function showError(msg) {
+    errorMessage.textContent = msg;
     switchView('error-view');
 }
