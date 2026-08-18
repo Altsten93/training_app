@@ -1,6 +1,10 @@
 // --- KONFIGURATION ---
-// Ändra till din publika backend-URL när du deployar till Cloud Run / Render
-const API_BASE_URL = "http://127.0.0.1:8000";
+// Lokalt körs appen mot den lokala FastAPI-servern.
+// I production kör frontend på Netlify och skickar anropen via Netlify redirect till den publika backend-URL:n.
+const API_BASE_URL =
+    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://127.0.0.1:8000'
+        : '';
 
 // --- DOM ELEMENT ---
 const views = document.querySelectorAll('.view');
