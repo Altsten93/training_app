@@ -213,7 +213,7 @@ async def complete_workout(req: CompleteWorkoutRequest):
         "sheetName": req.workoutType,
         "rowIndex": req.originalRowIndex,
         "date": today_str,
-        "difficulty": req.difficulty
+        "difficulty": float(req.difficulty)
     }
     
     async with httpx.AsyncClient(timeout=15.0) as client:
