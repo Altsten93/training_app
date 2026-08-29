@@ -86,8 +86,10 @@ workoutView.addEventListener('click', async (e) => {
     if (backBtn) {
         switchView('home-view');
     } else if (completeBtn) {
-        await renderCompletionProgress();
+        document.getElementById('difficulty-rating-section').style.display = 'block';
+        document.getElementById('home-from-completion-btn').style.display = 'none';
         switchView('completion-view');
+        await renderCompletionProgress();
     } else if (skipBtn) {
         skipWorkout();
     }
