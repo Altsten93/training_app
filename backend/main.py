@@ -56,10 +56,16 @@ class CompleteWorkoutRequest(BaseModel):
 async def fetch_all_workouts() -> pd.DataFrame:
     """Hämtar alla 3 Google Sheets asynkront och slår ihop till en DataFrame."""
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+        timestamp = int(datetime.now().timestamp() * 1000)
         responses = await asyncio.gather(
-            client.get(f"{CONFIG['chest']}&_={datetime.now().timestamp()}"),
-            client.get(f"{CONFIG['back']}&_={datetime.now().timestamp()}"),
-            client.get(f"{CONFIG['legs']}&_={datetime.now().timestamp()}")
+            client.get(f"{CONFIG['chest']}&t={timestamp}", headers=headers),
+            client.get(f"{CONFIG['back']}&t={timestamp}", headers=headers),
+            client.get(f"{CONFIG['legs']}&t={timestamp}", headers=headers)
         )
     
     dfs = []
@@ -80,7 +86,7 @@ async def fetch_all_workouts() -> pd.DataFrame:
     
     # Standardisera status och datum
     if "Completed_workout" in combined_df.columns:
-        combined_df["is_completed"] = combined_df["Completed_workout"].astype(str).str.strip().str.lower() == "ja"
+        combined_df["is_completed"] = combined_df["Completed_workout"].astype(str).str.strip().str.lower().isin(["ja", "yes", "true", "1"])
     else:
         combined_df["is_completed"] = False
 

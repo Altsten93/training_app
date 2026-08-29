@@ -159,6 +159,9 @@ async function submitWorkoutCompletion(difficulty) {
 
         if (!res.ok) throw new Error("Misslyckades att spara i Google Sheets.");
 
+        // Ladda om nästa pass i bakgrunden så att state uppdateras
+        await loadNextWorkout(currentGroupIndex, { returnToHome: false });
+
         await renderCompletionProgress();
 
         showTempNotification("Träningspasset är sparat!", "success");
