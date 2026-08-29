@@ -1,10 +1,10 @@
 // --- KONFIGURATION ---
 // Lokalt körs appen mot den lokala FastAPI-servern.
-// I production kör frontend på Netlify och skickar anropen via Netlify redirect till den publika backend-URL:n.
+// I production kopplar appen direkt mot den publika backend-URL:n på Render.
 const API_BASE_URL =
     window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
         ? 'http://127.0.0.1:8000'
-        : '';
+        : 'https://training-app-p9y1.onrender.com';
 
 // --- DOM ELEMENT ---
 const views = document.querySelectorAll('.view');
