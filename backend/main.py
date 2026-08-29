@@ -8,7 +8,12 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import io
 import asyncio
+
 app = FastAPI(title="Workout Brain API", version="1.0.0")
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Workout Brain API is running"}
 
 # ==========================================
 # 1. CORS-INSTÄLLNINGAR (Tillåt din Netlify-app)
