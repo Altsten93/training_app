@@ -100,9 +100,25 @@ document.querySelectorAll('.back-btn').forEach(btn => {
 });
 
 // --- NAVIGATION ---
+let loaderTimeoutId = null;
+
 function switchView(viewId) {
     views.forEach(v => v.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
+
+    const loaderSubtext = document.getElementById('loader-subtext');
+    if (loaderSubtext) {
+        if (viewId === 'loader-view') {
+            if (loaderTimeoutId) clearTimeout(loaderTimeoutId);
+            loaderSubtext.classList.add('hidden');
+            loaderTimeoutId = setTimeout(() => {
+                loaderSubtext.classList.remove('hidden');
+            }, 3000);
+        } else {
+            if (loaderTimeoutId) clearTimeout(loaderTimeoutId);
+            loaderSubtext.classList.add('hidden');
+        }
+    }
 }
 
 // --- API-ANROP ---
@@ -159,8 +175,9 @@ async function submitWorkoutCompletion(difficulty) {
 
         if (!res.ok) throw new Error("Misslyckades att spara i Google Sheets.");
 
-        // Ladda om nästa pass i bakgrunden så att state uppdateras
-        await loadNextWorkout(currentGroupIndex, { returnToHome: false });
+        // Hämta nästa pass automatiskt (groupIndex = null så att algoritmen väljer
+        // den muskelgrupp som nu har gått längst sedan förra passet)
+        await loadNextWorkout(null, { returnToHome: false });
 
         await renderCompletionProgress();
 

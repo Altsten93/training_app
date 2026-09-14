@@ -41,6 +41,40 @@ WEEKLY_GOAL_KG = 12000.0
 WORKOUT_ORDER = ["Chest", "Back", "Legs"]
 
 # ==========================================
+# CACHE & IN-MEMORY OVERRIDES
+# ==========================================
+CACHE_TTL_SECONDS = 60
+_cache: Dict[str, Any] = {
+    "df": None,
+    "timestamp": 0.0
+}
+_cache_lock = asyncio.Lock()
+
+# Key: (workout_type_lower, original_row_index) -> {"date": str, "difficulty": float}
+COMPLETED_OVERRIDES: Dict[tuple, Dict[str, Any]] = {}
+
+
+def apply_overrides(df: pd.DataFrame) -> pd.DataFrame:
+    """Applicerar lokala ändringar från genomförda pass innan Google Sheets CSV-cachen har hunnit uppdateras."""
+    if not COMPLETED_OVERRIDES or df.empty:
+        return df
+
+    df = df.copy()
+    for (w_type, row_idx), data in COMPLETED_OVERRIDES.items():
+        mask = (df["workoutType"].astype(str).str.lower() == w_type) & (df["originalRowIndex"] == row_idx)
+        if mask.any():
+            df.loc[mask, "is_completed"] = True
+            df.loc[mask, "Completed_workout"] = "Ja"
+            df.loc[mask, "Datum"] = data["date"]
+            df.loc[mask, "parsed_date"] = pd.to_datetime(data["date"], format="mixed", errors="coerce")
+
+            diff_col = f"{w_type.capitalize()}_difficulty"
+            if diff_col in df.columns:
+                df.loc[mask, diff_col] = data["difficulty"]
+    return df
+
+
+# ==========================================
 # 3. DATA-MODELLER (Pydantic)
 # ==========================================
 class CompleteWorkoutRequest(BaseModel):
@@ -53,58 +87,72 @@ class CompleteWorkoutRequest(BaseModel):
 # ==========================================
 # 4. HJÄLPFUNKTIONER FÖR DATABEHANDLING
 # ==========================================
-async def fetch_all_workouts() -> pd.DataFrame:
-    """Hämtar alla 3 Google Sheets asynkront och slår ihop till en DataFrame."""
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        headers = {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-        timestamp = int(datetime.now().timestamp() * 1000)
-        responses = await asyncio.gather(
-            client.get(f"{CONFIG['chest']}&t={timestamp}", headers=headers),
-            client.get(f"{CONFIG['back']}&t={timestamp}", headers=headers),
-            client.get(f"{CONFIG['legs']}&t={timestamp}", headers=headers)
-        )
-    
-    dfs = []
-    types = ["Chest", "Back", "Legs"]
-    
-    for resp, workout_type in zip(responses, types):
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Kunde inte hämta data för {workout_type}")
-        
-        # Läs CSV från text
-        df = pd.read_csv(io.StringIO(resp.text))
-        df["workoutType"] = workout_type
-        # Radnummer i kalkylarket (1-indexerat med hänsyn till rubrikrad)
-        df["originalRowIndex"] = df.index + 2
-        dfs.append(df)
-        
-    combined_df = pd.concat(dfs, ignore_index=True)
-    
-    # Standardisera status och datum
-    if "Completed_workout" in combined_df.columns:
-        combined_df["is_completed"] = combined_df["Completed_workout"].astype(str).str.strip().str.lower().isin(["ja", "yes", "true", "1"])
-    else:
-        combined_df["is_completed"] = False
+async def fetch_all_workouts(force_refresh: bool = False) -> pd.DataFrame:
+    """Hämtar alla 3 Google Sheets asynkront och slår ihop till en DataFrame med caching."""
+    async with _cache_lock:
+        now = datetime.now().timestamp()
+        if not force_refresh and _cache["df"] is not None and (now - _cache["timestamp"]) < CACHE_TTL_SECONDS:
+            return apply_overrides(_cache["df"])
 
-    if "Datum" in combined_df.columns:
-        combined_df["parsed_date"] = pd.to_datetime(
-            combined_df["Datum"], format="mixed", dayfirst=True, errors="coerce"
-        )
-    else:
-        combined_df["parsed_date"] = pd.NaT
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            headers = {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+            timestamp = int(datetime.now().timestamp() * 1000)
+            responses = await asyncio.gather(
+                client.get(f"{CONFIG['chest']}&t={timestamp}", headers=headers),
+                client.get(f"{CONFIG['back']}&t={timestamp}", headers=headers),
+                client.get(f"{CONFIG['legs']}&t={timestamp}", headers=headers)
+            )
 
-    # Räkna ut total volym per rad genom att summera alla kolumner som slutar på '_volym'
-    vol_cols = [c for c in combined_df.columns if c.endswith("_volym")]
-    if vol_cols:
-        combined_df["total_volym"] = combined_df[vol_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
-    else:
-        combined_df["total_volym"] = 0.0
+        dfs = []
+        types = ["Chest", "Back", "Legs"]
 
-    return combined_df
+        for resp, workout_type in zip(responses, types):
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Kunde inte hämta data för {workout_type}")
+
+            df = pd.read_csv(io.StringIO(resp.text))
+            df["workoutType"] = workout_type
+            df["originalRowIndex"] = df.index + 2
+            dfs.append(df)
+
+        combined_df = pd.concat(dfs, ignore_index=True)
+
+        if "Completed_workout" in combined_df.columns:
+            combined_df["is_completed"] = combined_df["Completed_workout"].astype(str).str.strip().str.lower().isin(["ja", "yes", "true", "1"])
+        else:
+            combined_df["is_completed"] = False
+
+        if "Datum" in combined_df.columns:
+            combined_df["parsed_date"] = pd.to_datetime(
+                combined_df["Datum"], format="mixed", dayfirst=True, errors="coerce"
+            )
+        else:
+            combined_df["parsed_date"] = pd.NaT
+
+        vol_cols = [c for c in combined_df.columns if c.endswith("_volym")]
+        if vol_cols:
+            combined_df["total_volym"] = combined_df[vol_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+        else:
+            combined_df["total_volym"] = 0.0
+
+        # Rensa eventuella overrides som nu har bekräftats som 'Ja' i Google Sheets
+        if COMPLETED_OVERRIDES:
+            keys_to_remove = []
+            for (w_type, row_idx) in list(COMPLETED_OVERRIDES.keys()):
+                match = combined_df[(combined_df["workoutType"].astype(str).str.lower() == w_type) & (combined_df["originalRowIndex"] == row_idx)]
+                if not match.empty and match.iloc[0]["is_completed"]:
+                    keys_to_remove.append((w_type, row_idx))
+            for k in keys_to_remove:
+                COMPLETED_OVERRIDES.pop(k, None)
+
+        _cache["df"] = combined_df.copy()
+        _cache["timestamp"] = now
+
+        return apply_overrides(_cache["df"])
 
 
 def extract_exercises(row: pd.Series) -> List[Dict[str, Any]]:
@@ -151,12 +199,15 @@ def get_funny_message(days_since: Optional[int]) -> str:
 import asyncio
 
 @app.get("/api/workout/next")
-async def get_next_workout(group_index: Optional[int] = Query(None, ge=0, le=2)):
+async def get_next_workout(
+    group_index: Optional[int] = Query(None, ge=0, le=2),
+    force_refresh: bool = Query(False)
+):
     """
     Hämtar nästa schemalagda pass och räknar ut dagar sedan förra passet i samma kategori.
     Om group_index utelämnas väljs den muskelgrupp som tränades längst sedan automatiskt.
     """
-    df = await fetch_all_workouts()
+    df = await fetch_all_workouts(force_refresh=force_refresh)
     
     # 1. Identifiera senaste genomförda datum för respektive grupp
     completed = df[df["is_completed"] & df["parsed_date"].notna()]
@@ -226,6 +277,18 @@ async def complete_workout(req: CompleteWorkoutRequest):
         try:
             resp = await client.post(CONFIG["scriptUrl"], json=payload)
             result = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {"status": "ok"}
+            
+            # Spara direkt i in-memory overrides så att appen omedelbart ser passet som klart,
+            # även om Google Sheets pub/csv-cache tar 5-15 minuter att uppdateras på Google CDN.
+            COMPLETED_OVERRIDES[(req.workoutType.lower(), req.originalRowIndex)] = {
+                "date": today_str,
+                "difficulty": float(req.difficulty)
+            }
+            # Invalidera cachen så nästa anrop omedelbart applicerar uppdateringen
+            async with _cache_lock:
+                _cache["df"] = None
+                _cache["timestamp"] = 0.0
+
             return {"status": "success", "message": "Pass markerat som klart!", "result": result}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Kunde inte uppdatera Google Sheet: {str(e)}")
@@ -247,7 +310,7 @@ async def retrain_model():
 
 
 @app.get("/api/dashboard")
-async def get_dashboard():
+async def get_dashboard(force_refresh: bool = Query(False)):
     """
     Räknar ut all data för dashboarden:
     - Veckomål och nuvarande veckovolym (Pie/Doughnut)
@@ -255,7 +318,7 @@ async def get_dashboard():
     - Totalt antal genomförda pass (Bar chart)
     - Normaliserad intensitet vs svårighetsgrad (Adaption chart)
     """
-    df = await fetch_all_workouts()
+    df = await fetch_all_workouts(force_refresh=force_refresh)
     completed = df[df["is_completed"] & df["parsed_date"].notna()].copy()
     
     if completed.empty:
