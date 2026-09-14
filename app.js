@@ -64,6 +64,50 @@ document.getElementById('show-stats-btn').addEventListener('click', () => {
     loadDashboard();
 });
 
+// Modal för Filosofi & Metodik
+const philosophyModal = document.getElementById('philosophy-modal');
+const philosophyCard = document.getElementById('philosophy-modal-card');
+
+function openPhilosophyModal() {
+    if (!philosophyModal) return;
+    philosophyModal.classList.remove('hidden');
+    // Använd kort timeout för css scale/opacity animation om tillämpligt
+    setTimeout(() => {
+        philosophyCard?.classList.remove('scale-95');
+        philosophyCard?.classList.add('scale-100');
+    }, 10);
+    document.body.style.overflow = 'hidden';
+}
+
+function closePhilosophyModal() {
+    if (!philosophyModal) return;
+    philosophyCard?.classList.remove('scale-100');
+    philosophyCard?.classList.add('scale-95');
+    setTimeout(() => {
+        philosophyModal.classList.add('hidden');
+        document.body.style.overflow = '';
+    }, 150);
+}
+
+document.getElementById('open-philosophy-btn')?.addEventListener('click', openPhilosophyModal);
+document.getElementById('info-adaptation-btn')?.addEventListener('click', openPhilosophyModal);
+document.getElementById('close-philosophy-btn')?.addEventListener('click', closePhilosophyModal);
+document.getElementById('close-philosophy-btn-footer')?.addEventListener('click', closePhilosophyModal);
+
+// Stäng vid klick utanför kortet
+philosophyModal?.addEventListener('click', (e) => {
+    if (e.target === philosophyModal) {
+        closePhilosophyModal();
+    }
+});
+
+// Stäng med Escape-tangenten
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && philosophyModal && !philosophyModal.classList.contains('hidden')) {
+        closePhilosophyModal();
+    }
+});
+
 document.getElementById('refresh-data-btn').addEventListener('click', () => loadNextWorkout(currentGroupIndex));
 document.getElementById('home-from-completion-btn').addEventListener('click', () => location.reload());
 
