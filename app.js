@@ -1,10 +1,32 @@
-// --- KONFIGURATION ---
-// Lokalt körs appen mot den lokala FastAPI-servern.
-// I production kopplar appen direkt mot den publika backend-URL:n på Render.
-const API_BASE_URL =
-    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-        ? 'http://127.0.0.1:8000'
-        : 'https://training-app-p9y1.onrender.com';
+// --- KONFIGURATION & ROBUST API FALLBACK ---
+// Försöker i första hand mot lokal FastAPI (om den är igång på port 8000).
+// Faller automatiskt och sömlöst tillbaka på produktionsservern på Render om port 8000 inte svarar.
+const LOCAL_API_URL = 'http://127.0.0.1:8000';
+const PROD_API_URL = 'https://training-app-p9y1.onrender.com';
+
+let activeApiBase = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? LOCAL_API_URL
+    : PROD_API_URL;
+
+async function apiFetch(path, options = {}) {
+    // Om vi är på localhost och försöker mot lokal backend, testa med kort timeout
+    if (activeApiBase === LOCAL_API_URL) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2500);
+            const res = await fetch(`${LOCAL_API_URL}${path}`, {
+                ...options,
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (res.ok) return res;
+        } catch (err) {
+            console.warn(`Lokal server svarar inte på ${LOCAL_API_URL}, byter automatiskt till Render backend: ${PROD_API_URL}`);
+            activeApiBase = PROD_API_URL;
+        }
+    }
+    return fetch(`${PROD_API_URL}${path}`, options);
+}
 
 // --- DOM ELEMENT ---
 const views = document.querySelectorAll('.view');
@@ -55,11 +77,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadDashboard();
 });
 
-document.getElementById('show-workout-btn').addEventListener('click', () => {
+document.getElementById('show-workout-btn')?.addEventListener('click', () => {
     switchView('workout-view');
 });
 
-document.getElementById('show-stats-btn').addEventListener('click', () => {
+document.getElementById('home-skip-btn')?.addEventListener('click', () => {
+    skipWorkout(true);
+});
+
+document.getElementById('show-stats-btn')?.addEventListener('click', () => {
     switchView('dashboard-view');
     loadDashboard();
 });
@@ -108,19 +134,32 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('refresh-data-btn').addEventListener('click', () => loadNextWorkout(currentGroupIndex));
-document.getElementById('home-from-completion-btn').addEventListener('click', () => location.reload());
+document.getElementById('refresh-data-btn')?.addEventListener('click', async () => {
+    const icon = document.getElementById('refresh-icon');
+    if (icon) icon.classList.add('animate-spin');
+    try {
+        await loadNextWorkout(currentGroupIndex, { returnToHome: true });
+        await loadDashboard();
+        showTempNotification("Data har synkats!", "success");
+    } catch (e) {
+        showTempNotification("Kunde inte synka data: " + e.message, "error");
+    } finally {
+        if (icon) icon.classList.remove('animate-spin');
+    }
+});
 
-document.getElementById('difficulty-slider').addEventListener('input', (e) => {
+document.getElementById('home-from-completion-btn')?.addEventListener('click', () => location.reload());
+
+document.getElementById('difficulty-slider')?.addEventListener('input', (e) => {
     document.getElementById('difficulty-value').textContent = e.target.value;
 });
 
-document.getElementById('submit-difficulty-btn').addEventListener('click', () => {
+document.getElementById('submit-difficulty-btn')?.addEventListener('click', () => {
     const difficulty = parseFloat(document.getElementById('difficulty-slider').value);
     submitWorkoutCompletion(difficulty);
 });
 
-document.getElementById('retrain-ml-btn').addEventListener('click', handleRetrainModel);
+document.getElementById('retrain-ml-btn')?.addEventListener('click', handleRetrainModel);
 
 workoutView.addEventListener('click', async (e) => {
     const backBtn = e.target.closest('.back-btn');
@@ -173,11 +212,11 @@ async function loadNextWorkout(groupIndex = null, options = {}) {
 
     try {
         switchView('loader-view');
-        const url = groupIndex !== null 
-            ? `${API_BASE_URL}/api/workout/next?group_index=${groupIndex}` 
-            : `${API_BASE_URL}/api/workout/next`;
+        const path = groupIndex !== null 
+            ? `/api/workout/next?group_index=${groupIndex}` 
+            : `/api/workout/next`;
             
-        const res = await fetch(url);
+        const res = await apiFetch(path);
         if (!res.ok) throw new Error("Kunde inte hämta pass från servern.");
         
         currentWorkoutData = await res.json();
@@ -195,9 +234,9 @@ async function loadNextWorkout(groupIndex = null, options = {}) {
 }
 
 /** Byter till nästa muskelgrupp (Chest -> Back -> Legs) */
-async function skipWorkout() {
+async function skipWorkout(stayOnHome = false) {
     currentGroupIndex = (currentGroupIndex + 1) % 3;
-    await loadNextWorkout(currentGroupIndex, { returnToHome: false });
+    await loadNextWorkout(currentGroupIndex, { returnToHome: stayOnHome });
 }
 
 /** Slutför träningspass och sparar i Google Sheets via FastAPI */
@@ -207,7 +246,7 @@ async function submitWorkoutCompletion(difficulty) {
     btn.textContent = 'Sparar...';
 
     try {
-        const res = await fetch(`${API_BASE_URL}/api/workout/complete`, {
+        const res = await apiFetch(`/api/workout/complete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -240,10 +279,10 @@ async function handleRetrainModel() {
     const btn = document.getElementById('retrain-ml-btn');
     const originalContent = btn.innerHTML;
     btn.disabled = true;
-    btn.innerHTML = `<h2 class="text-2xl font-bold text-white">Retraining...</h2><p class="text-gray-400">Vänligen vänta...</p>`;
+    btn.innerHTML = `<span class="animate-spin text-xs">⏳</span><span class="text-xs">Tränar...</span>`;
 
     try {
-        const res = await fetch(`${API_BASE_URL}/api/model/retrain`, { method: 'POST' });
+        const res = await apiFetch(`/api/model/retrain`, { method: 'POST' });
         const data = await res.json();
         showTempNotification(`Modell omtränad!\n${data.serverMessage || ''}`, 'success');
         loadNextWorkout(currentGroupIndex);
@@ -258,7 +297,7 @@ async function handleRetrainModel() {
 /** Hämtar all dashboard-data och ritar upp graferna */
 async function loadDashboard() {
     try {
-        const res = await fetch(`${API_BASE_URL}/api/dashboard`);
+        const res = await apiFetch(`/api/dashboard`);
         const data = await res.json();
 
         if (data.empty) return;
@@ -281,7 +320,7 @@ async function loadDashboard() {
 
 async function renderCompletionProgress() {
     try {
-        const dashboardRes = await fetch(`${API_BASE_URL}/api/dashboard`);
+        const dashboardRes = await apiFetch(`/api/dashboard`);
         const dashboardData = await dashboardRes.json();
         if (!dashboardData.empty) {
             renderProgressPie(dashboardData.weeklyProgress);
@@ -339,7 +378,59 @@ function renderProgressPie(progress) {
 
 // --- UI RENDERING ---
 
+function updateHomeHero(data) {
+    const heroBadge = document.getElementById('hero-type-badge');
+    const heroDaysSince = document.getElementById('hero-days-since');
+    const heroExercisesPreview = document.getElementById('hero-exercises-preview');
+
+    if (data.allCompleted) {
+        if (heroBadge) {
+            heroBadge.textContent = "Klar";
+            heroBadge.className = "text-xs uppercase font-bold tracking-wider px-2.5 py-1 rounded-md bg-emerald-900/60 text-emerald-300 border border-emerald-700/50";
+        }
+        if (heroDaysSince) heroDaysSince.textContent = "Alla pass avklarade 🎉";
+        if (heroExercisesPreview) {
+            heroExercisesPreview.innerHTML = `<div class="text-xs text-emerald-400 py-3 text-center w-full col-span-3 font-semibold">Alla schemalagda pass i denna kategori är slutförda!</div>`;
+        }
+        return;
+    }
+
+    const typeColors = {
+        Chest: { badgeBg: 'bg-emerald-950/70', badgeText: 'text-emerald-300', badgeBorder: 'border-emerald-700/50' },
+        Back: { badgeBg: 'bg-rose-950/70', badgeText: 'text-rose-300', badgeBorder: 'border-rose-700/50' },
+        Legs: { badgeBg: 'bg-blue-950/70', badgeText: 'text-blue-300', badgeBorder: 'border-blue-700/50' }
+    };
+
+    const colorScheme = typeColors[data.workoutType] || typeColors.Chest;
+    if (heroBadge) {
+        heroBadge.className = `text-xs uppercase font-bold tracking-wider px-2.5 py-1 rounded-md border ${colorScheme.badgeBg} ${colorScheme.badgeText} ${colorScheme.badgeBorder}`;
+        heroBadge.textContent = data.workoutType;
+    }
+
+    if (heroDaysSince) {
+        heroDaysSince.textContent = data.daysSinceLastWorkout !== null && data.daysSinceLastWorkout !== undefined
+            ? (data.daysSinceLastWorkout === 0 ? "Kördes idag" : `Vilade ${data.daysSinceLastWorkout} d`)
+            : "Ny kategori";
+    }
+
+    if (heroExercisesPreview) {
+        if (data.exercises && data.exercises.length > 0) {
+            heroExercisesPreview.innerHTML = data.exercises.map(ex => `
+                <div class="bg-gray-900/70 p-3 rounded-xl border border-gray-700/60 text-center">
+                    <p class="text-xs font-medium text-gray-300 capitalize truncate">${ex.name}</p>
+                    <p class="text-lg font-black text-orange-400 my-0.5">${ex.kg} kg</p>
+                    <p class="text-[11px] font-mono text-gray-400">${ex.sets} set &times; ${ex.reps} reps</p>
+                </div>
+            `).join('');
+        } else {
+            heroExercisesPreview.innerHTML = `<div class="text-xs text-gray-400 text-center py-2 col-span-3">Inga övningsdetaljer tillgängliga</div>`;
+        }
+    }
+}
+
 function renderWorkoutScreen(data) {
+    updateHomeHero(data);
+
     workoutView.innerHTML = `
         <button class="back-btn mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Home</button>
         ${data.allCompleted ? `
@@ -379,12 +470,30 @@ function renderWorkoutScreen(data) {
 // --- GRAFRITNING (Chart.js) ---
 
 function renderDashboardPie(progress) {
-    const ctx = document.getElementById('dashboard-progress-pie-chart')?.getContext('2d');
-    if (!ctx) return;
-    if (dashboardProgressPieChartInstance) dashboardProgressPieChartInstance.destroy();
+    // Uppdatera även Bento-kortet på hemskärmen
+    const homeWeeklyVolume = document.getElementById('home-weekly-volume');
+    const homeWeeklyPercent = document.getElementById('home-weekly-percent');
+    const homeWeeklyProgressbar = document.getElementById('home-weekly-progressbar');
+    const homeWeeklySubtext = document.getElementById('home-weekly-subtext');
 
     const totalVolume = Number(progress.currentWeekVolume ?? Object.values(progress.volumeByType ?? {}).reduce((sum, value) => sum + Number(value || 0), 0));
     const goalVolume = Number(progress.weeklyGoal ?? 12000);
+    const percent = Math.min(100, Math.round((totalVolume / goalVolume) * 100));
+
+    if (homeWeeklyVolume) homeWeeklyVolume.textContent = Math.round(totalVolume).toLocaleString();
+    if (homeWeeklyPercent) homeWeeklyPercent.textContent = `${percent}%`;
+    if (homeWeeklyProgressbar) homeWeeklyProgressbar.style.width = `${percent}%`;
+    if (homeWeeklySubtext) {
+        if (percent >= 100) {
+            homeWeeklySubtext.textContent = "Målet uppnått för veckan! Extra pass är ren bonus.";
+        } else {
+            homeWeeklySubtext.textContent = `${Math.round(goalVolume - totalVolume).toLocaleString()} kg kvar – ett lyft i taget.`;
+        }
+    }
+
+    const ctx = document.getElementById('dashboard-progress-pie-chart')?.getContext('2d');
+    if (!ctx) return;
+    if (dashboardProgressPieChartInstance) dashboardProgressPieChartInstance.destroy();
     const colors = { Chest: '#48BB78', Back: '#F56565', Legs: '#4299E1' };
 
     const labels = Object.keys(progress.volumeByType || {})
