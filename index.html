@@ -223,6 +223,7 @@
 
         <!-- View 6: Completion Screen -->
         <div id="completion-view" class="view">
+            <button id="back-to-workout-btn" class="mb-4 font-semibold text-blue-400 hover:text-blue-300">&larr; Back to Workout</button>
             <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 text-center">
                 <h2 class="text-2xl font-bold text-green-400">Session Complete!</h2>
                 <p class="text-gray-400 mt-2 mb-6">Here's your weekly progress towards your 12,000kg goal.</p>
@@ -235,7 +236,10 @@
                     <label for="difficulty-slider" class="block text-lg font-semibold mb-2">How difficult was this session? (1-10)</label>
                     <input type="range" id="difficulty-slider" min="1" max="10" value="5" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
                     <div class="text-xl font-bold mt-2" id="difficulty-value">5</div>
-                    <button id="submit-difficulty-btn" class="mt-4 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg">Submit Rating</button>
+                    <div class="flex justify-center gap-3 mt-4">
+                        <button id="cancel-completion-btn" type="button" class="bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white font-semibold py-3 px-6 rounded-lg transition-colors">Cancel</button>
+                        <button id="submit-difficulty-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">Submit Rating</button>
+                    </div>
                 </div>
 
                 <button id="home-from-completion-btn" class="mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg" style="display: none;">Back to Home</button>

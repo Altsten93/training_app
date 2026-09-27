@@ -150,6 +150,14 @@ document.getElementById('refresh-data-btn')?.addEventListener('click', async () 
 
 document.getElementById('home-from-completion-btn')?.addEventListener('click', () => location.reload());
 
+document.getElementById('back-to-workout-btn')?.addEventListener('click', () => {
+    switchView('workout-view');
+});
+
+document.getElementById('cancel-completion-btn')?.addEventListener('click', () => {
+    switchView('workout-view');
+});
+
 document.getElementById('difficulty-slider')?.addEventListener('input', (e) => {
     document.getElementById('difficulty-value').textContent = e.target.value;
 });
@@ -171,6 +179,8 @@ workoutView.addEventListener('click', async (e) => {
     } else if (completeBtn) {
         document.getElementById('difficulty-rating-section').style.display = 'block';
         document.getElementById('home-from-completion-btn').style.display = 'none';
+        const backToWorkoutBtn = document.getElementById('back-to-workout-btn');
+        if (backToWorkoutBtn) backToWorkoutBtn.style.display = 'inline-block';
         switchView('completion-view');
         await renderCompletionProgress();
     } else if (skipBtn) {
@@ -266,6 +276,8 @@ async function submitWorkoutCompletion(difficulty) {
 
         showTempNotification("Träningspasset är sparat!", "success");
         document.getElementById('difficulty-rating-section').style.display = 'none';
+        const backToWorkoutBtn = document.getElementById('back-to-workout-btn');
+        if (backToWorkoutBtn) backToWorkoutBtn.style.display = 'none';
         document.getElementById('home-from-completion-btn').style.display = 'block';
     } catch (err) {
         showTempNotification(err.message, "error");
