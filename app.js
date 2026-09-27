@@ -638,14 +638,20 @@ function renderAdaptionChart(datasets, minDate, maxDate) {
     if (!ctx) return;
     if (intensityDifficultyChartInstance) intensityDifficultyChartInstance.destroy();
 
+    const smoothDatasets = datasets.map(ds => ({
+        ...ds,
+        pointRadius: 0,
+        pointHoverRadius: 0
+    }));
+
     intensityDifficultyChartInstance = new Chart(ctx, {
         type: 'line',
-        data: { datasets },
+        data: { datasets: smoothDatasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: 'nearest', intersect: false },
-            elements: { point: { radius: 2, hoverRadius: 4 }, line: { tension: 0.3, borderWidth: 2 } },
+            elements: { point: { radius: 0, hoverRadius: 0 }, line: { tension: 0.3, borderWidth: 2 } },
             scales: {
                 x: {
                     type: 'time',
