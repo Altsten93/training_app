@@ -390,52 +390,128 @@ function renderProgressPie(progress) {
 
 // --- UI RENDERING ---
 
+function getExerciseSvg(workoutType, exerciseName) {
+    const type = (workoutType || '').toLowerCase();
+    const name = (exerciseName || '').toLowerCase();
+
+    if (type.includes('leg') || name.includes('squat') || name.includes('knäböj')) {
+        return `
+        <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full h-full text-blue-400">
+            <!-- Barbell bar & plates -->
+            <line x1="8" y1="36" x2="88" y2="36" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+            <rect x="12" y="21" width="6" height="30" rx="2" fill="currentColor" fill-opacity="0.9"/>
+            <rect x="19" y="25" width="4" height="22" rx="1.5" fill="currentColor"/>
+            <rect x="73" y="25" width="4" height="22" rx="1.5" fill="currentColor"/>
+            <rect x="78" y="21" width="6" height="30" rx="2" fill="currentColor" fill-opacity="0.9"/>
+            <!-- Lifter head -->
+            <circle cx="48" cy="21" r="6.5" fill="currentColor"/>
+            <!-- Torso, Thighs & Shins (Squat posture) -->
+            <path d="M48 29 L43 47 L63 51 L57 76" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- Foot -->
+            <path d="M54 76 L66 76" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+            <!-- Arms supporting barbell -->
+            <path d="M36 36 L43 43 L48 31 L53 43 L60 36" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>`;
+    } else if (type.includes('chest') || name.includes('bänk') || name.includes('bench') || name.includes('press')) {
+        return `
+        <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full h-full text-emerald-400">
+            <!-- Bench frame -->
+            <line x1="16" y1="62" x2="80" y2="62" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="26" y1="62" x2="26" y2="78" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="70" y1="62" x2="70" y2="78" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="32" y1="38" x2="32" y2="62" stroke="currentColor" stroke-width="2" stroke-dasharray="2 3" stroke-opacity="0.4"/>
+            <!-- Barbell -->
+            <line x1="10" y1="34" x2="86" y2="34" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+            <rect x="13" y="19" width="6" height="30" rx="2" fill="currentColor" fill-opacity="0.9"/>
+            <rect x="77" y="19" width="6" height="30" rx="2" fill="currentColor" fill-opacity="0.9"/>
+            <!-- Lifter head & body on bench -->
+            <circle cx="28" cy="54" r="6" fill="currentColor"/>
+            <path d="M34 57 L62 57 L72 74" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- Arms pressing upward -->
+            <path d="M42 57 L46 36 M54 57 L50 36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>`;
+    } else {
+        return `
+        <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full h-full text-rose-400">
+            <!-- Floor line -->
+            <line x1="8" y1="78" x2="88" y2="78" stroke="currentColor" stroke-width="2" stroke-opacity="0.4" stroke-linecap="round"/>
+            <!-- Deadlift weight plates -->
+            <circle cx="16" cy="62" r="14" stroke="currentColor" stroke-width="3.5" fill="currentColor" fill-opacity="0.25"/>
+            <circle cx="16" cy="62" r="4.5" fill="currentColor"/>
+            <circle cx="80" cy="62" r="14" stroke="currentColor" stroke-width="3.5" fill="currentColor" fill-opacity="0.25"/>
+            <circle cx="80" cy="62" r="4.5" fill="currentColor"/>
+            <!-- Barbell shaft -->
+            <line x1="8" y1="62" x2="88" y2="62" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+            <!-- Lifter head -->
+            <circle cx="48" cy="18" r="6.5" fill="currentColor"/>
+            <!-- Torso, Hips & Legs in deadlift posture -->
+            <path d="M48 26 L45 46 L39 62 L41 78 M45 46 L53 62 L51 78" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- Arms gripping barbell -->
+            <path d="M46 30 L36 62 M49 30 L58 62" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+        </svg>`;
+    }
+}
+
 function updateHomeHero(data) {
-    const heroBadge = document.getElementById('hero-type-badge');
+    const heroTypeName = document.getElementById('hero-type-name');
     const heroDaysSince = document.getElementById('hero-days-since');
     const heroExercisesPreview = document.getElementById('hero-exercises-preview');
 
     if (data.allCompleted) {
-        if (heroBadge) {
-            heroBadge.textContent = "Klar";
-            heroBadge.className = "text-xs uppercase font-bold tracking-wider px-2.5 py-1 rounded-md bg-emerald-900/60 text-emerald-300 border border-emerald-700/50";
+        if (heroTypeName) {
+            heroTypeName.textContent = data.workoutType || "Klar";
+            heroTypeName.className = "text-xl sm:text-2xl font-black text-emerald-400";
         }
         if (heroDaysSince) heroDaysSince.textContent = "Alla pass avklarade 🎉";
         if (heroExercisesPreview) {
-            heroExercisesPreview.innerHTML = `<div class="text-xs text-emerald-400 py-3 text-center w-full col-span-3 font-semibold">Alla schemalagda pass i denna kategori är slutförda!</div>`;
+            heroExercisesPreview.innerHTML = `<div class="text-sm text-emerald-400 py-6 text-center w-full font-semibold">Alla schemalagda pass i denna kategori är slutförda!</div>`;
         }
         return;
     }
 
     const typeColors = {
-        Chest: { badgeBg: 'bg-emerald-950/70', badgeText: 'text-emerald-300', badgeBorder: 'border-emerald-700/50' },
-        Back: { badgeBg: 'bg-rose-950/70', badgeText: 'text-rose-300', badgeBorder: 'border-rose-700/50' },
-        Legs: { badgeBg: 'bg-blue-950/70', badgeText: 'text-blue-300', badgeBorder: 'border-blue-700/50' }
+        Chest: 'text-emerald-400',
+        Back: 'text-rose-400',
+        Legs: 'text-blue-400'
     };
 
-    const colorScheme = typeColors[data.workoutType] || typeColors.Chest;
-    if (heroBadge) {
-        heroBadge.className = `text-xs uppercase font-bold tracking-wider px-2.5 py-1 rounded-md border ${colorScheme.badgeBg} ${colorScheme.badgeText} ${colorScheme.badgeBorder}`;
-        heroBadge.textContent = data.workoutType;
+    if (heroTypeName) {
+        heroTypeName.className = `text-xl sm:text-2xl font-black ${typeColors[data.workoutType] || 'text-white'}`;
+        heroTypeName.textContent = data.workoutType;
     }
 
     if (heroDaysSince) {
-        heroDaysSince.textContent = data.daysSinceLastWorkout !== null && data.daysSinceLastWorkout !== undefined
-            ? (data.daysSinceLastWorkout === 0 ? "Kördes idag" : `Vilade ${data.daysSinceLastWorkout} d`)
-            : "Ny kategori";
+        let daysText = "Ready";
+        if (data.daysSinceLastWorkout !== null && data.daysSinceLastWorkout !== undefined) {
+            if (data.daysSinceLastWorkout === 0) {
+                daysText = "Today";
+            } else if (data.daysSinceLastWorkout === 1) {
+                daysText = "1 Day ago";
+            } else {
+                daysText = `${data.daysSinceLastWorkout} Days ago`;
+            }
+        }
+        heroDaysSince.textContent = daysText;
     }
 
     if (heroExercisesPreview) {
-        if (data.exercises && data.exercises.length > 0) {
-            heroExercisesPreview.innerHTML = data.exercises.map(ex => `
-                <div class="bg-gray-900/70 p-3 rounded-xl border border-gray-700/60 text-center">
-                    <p class="text-xs font-medium text-gray-300 capitalize truncate">${ex.name}</p>
-                    <p class="text-lg font-black text-orange-400 my-0.5">${ex.kg} kg</p>
-                    <p class="text-[11px] font-mono text-gray-400">${ex.sets} set &times; ${ex.reps} reps</p>
+        const ex = data.exercises && data.exercises.length > 0 ? data.exercises[0] : null;
+        if (ex) {
+            const svgIcon = getExerciseSvg(data.workoutType, ex.name);
+            heroExercisesPreview.innerHTML = `
+                <div class="flex-1 min-w-0">
+                    <p class="text-2xl sm:text-3xl font-black text-white tracking-tight capitalize truncate">${ex.name}</p>
+                    <div class="flex items-baseline gap-1.5 mt-1">
+                        <span class="text-4xl sm:text-5xl font-black text-orange-400 tracking-tight">${ex.kg}</span>
+                        <span class="text-xl sm:text-2xl font-extrabold text-orange-300">kg</span>
+                    </div>
                 </div>
-            `).join('');
+                <div class="w-20 h-20 sm:w-24 sm:h-24 flex-shrink-0 flex items-center justify-center p-2.5 rounded-2xl bg-gray-800/80 border border-gray-700/60 shadow-inner">
+                    ${svgIcon}
+                </div>
+            `;
         } else {
-            heroExercisesPreview.innerHTML = `<div class="text-xs text-gray-400 text-center py-2 col-span-3">Inga övningsdetaljer tillgängliga</div>`;
+            heroExercisesPreview.innerHTML = `<div class="text-xs text-gray-400 text-center py-4 w-full">Inga övningsdetaljer tillgängliga</div>`;
         }
     }
 }
