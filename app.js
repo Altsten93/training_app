@@ -455,16 +455,16 @@ function getExerciseSvg(workoutType, exerciseName) {
 function updateHomeHero(data) {
     const heroTypeName = document.getElementById('hero-type-name');
     const heroDaysSince = document.getElementById('hero-days-since');
-    const heroExercisesPreview = document.getElementById('hero-exercises-preview');
+    const heroLiftIcon = document.getElementById('hero-lift-icon');
 
     if (data.allCompleted) {
         if (heroTypeName) {
             heroTypeName.textContent = data.workoutType || "Klar";
-            heroTypeName.className = "text-xl sm:text-2xl font-black text-emerald-400";
+            heroTypeName.className = "text-2xl sm:text-3xl font-black text-emerald-400";
         }
-        if (heroDaysSince) heroDaysSince.textContent = "Alla pass avklarade 🎉";
-        if (heroExercisesPreview) {
-            heroExercisesPreview.innerHTML = `<div class="text-sm text-emerald-400 py-6 text-center w-full font-semibold">Alla schemalagda pass i denna kategori är slutförda!</div>`;
+        if (heroDaysSince) heroDaysSince.textContent = "Alla pass klara 🎉";
+        if (heroLiftIcon) {
+            heroLiftIcon.innerHTML = `<span class="text-2xl">🎉</span>`;
         }
         return;
     }
@@ -476,7 +476,7 @@ function updateHomeHero(data) {
     };
 
     if (heroTypeName) {
-        heroTypeName.className = `text-xl sm:text-2xl font-black ${typeColors[data.workoutType] || 'text-white'}`;
+        heroTypeName.className = `text-2xl sm:text-3xl font-black ${typeColors[data.workoutType] || 'text-white'}`;
         heroTypeName.textContent = data.workoutType;
     }
 
@@ -494,25 +494,9 @@ function updateHomeHero(data) {
         heroDaysSince.textContent = daysText;
     }
 
-    if (heroExercisesPreview) {
-        const ex = data.exercises && data.exercises.length > 0 ? data.exercises[0] : null;
-        if (ex) {
-            const svgIcon = getExerciseSvg(data.workoutType, ex.name);
-            heroExercisesPreview.innerHTML = `
-                <div class="flex-1 min-w-0">
-                    <p class="text-2xl sm:text-3xl font-black text-white tracking-tight capitalize truncate">${ex.name}</p>
-                    <div class="flex items-baseline gap-1.5 mt-1">
-                        <span class="text-4xl sm:text-5xl font-black text-orange-400 tracking-tight">${ex.kg}</span>
-                        <span class="text-xl sm:text-2xl font-extrabold text-orange-300">kg</span>
-                    </div>
-                </div>
-                <div class="w-20 h-20 sm:w-24 sm:h-24 flex-shrink-0 flex items-center justify-center p-2.5 rounded-2xl bg-gray-800/80 border border-gray-700/60 shadow-inner">
-                    ${svgIcon}
-                </div>
-            `;
-        } else {
-            heroExercisesPreview.innerHTML = `<div class="text-xs text-gray-400 text-center py-4 w-full">Inga övningsdetaljer tillgängliga</div>`;
-        }
+    if (heroLiftIcon) {
+        const exName = (data.exercises && data.exercises.length > 0) ? data.exercises[0].name : '';
+        heroLiftIcon.innerHTML = getExerciseSvg(data.workoutType, exName);
     }
 }
 
