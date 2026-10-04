@@ -112,9 +112,22 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             }
             records_to_save.append(record)
 
-    # 3. Here you batch upsert `records_to_save` into Supabase or your database
+ # 3. Deduplicera så att samma datum/övning inte skickas två gånger i samma batch
     if records_to_save:
-        supabase.table("workouts").upsert(records_to_save, on_conflict="user_id,workout_date,exercise").execute()
+        # Sparar senaste raden om samma datum förekommer flera gånger
+        unique_records = list({
+            (r["user_id"], r["workout_date"], r["exercise"]): r
+            for r in records_to_save
+        }.values())
+
+        # Skicka i batcher om 200 rader
+        batch_size = 200
+        for i in range(0, len(unique_records), batch_size):
+            chunk = unique_records[i : i + batch_size]
+            supabase.table("workouts").upsert(
+                chunk,
+                on_conflict="user_id,workout_date,exercise"
+            ).execute()
 
     return {
         "status": "success",
