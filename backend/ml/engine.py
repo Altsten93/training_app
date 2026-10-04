@@ -1,4 +1,5 @@
-import os
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeStubs=false
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -33,12 +34,10 @@ class WorkoutDifficultyPredictor:
     def _load_if_exists(self) -> None:
         """Laddar en tidigare sparad modell från disk om den existerar."""
         if self.model_path.exists():
-            try:
+            with suppress(Exception):
                 loaded = joblib.load(self.model_path)
                 if isinstance(loaded, Pipeline):
                     self.pipeline = loaded
-            except Exception:
-                self.pipeline = None
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Säkerställer att alla nödvändiga numeriska och kategoriska kolumner
@@ -79,7 +78,7 @@ class WorkoutDifficultyPredictor:
             raise ValueError("Ingen träningsdata skickades till modellen.")
 
         # Filtrera: enbart slutförda pass med giltigt difficulty-värde
-        mask = (df["completed"] == True) & df["difficulty"].notna()  # noqa: E712
+        mask = df["completed"].astype(bool) & df["difficulty"].notna()
         train_df = df[mask].copy()
 
         if len(train_df) < 5:
@@ -87,12 +86,12 @@ class WorkoutDifficultyPredictor:
                 f"För få träningsrader ({len(train_df)}) för att träna modellen."
             )
 
-        X = self._prepare_features(train_df)
-        y = pd.to_numeric(train_df["difficulty"], errors="coerce").astype(float)
+        X_train = self._prepare_features(train_df)
+        y_train = pd.to_numeric(train_df["difficulty"], errors="coerce").astype(float)
 
-        valid_idx = ~y.isna()
-        X = X[valid_idx]
-        y = y[valid_idx]
+        valid_idx = ~y_train.isna()
+        X_train = X_train[valid_idx]
+        y_train = y_train[valid_idx]
 
         # Förbered förbehandling med OneHotEncoding för kategorier
         preprocessor = ColumnTransformer(
@@ -120,27 +119,25 @@ class WorkoutDifficultyPredictor:
             ("regressor", regressor),
         ])
 
-        pipeline.fit(X, y)
+        pipeline.fit(X_train, y_train)
         self.pipeline = pipeline
 
         # Utvärdering på träningsdata
-        raw_preds = pipeline.predict(X)
+        raw_preds = pipeline.predict(X_train)
         clipped_preds = np.clip(raw_preds, 1.0, 10.0)
 
-        mae = float(mean_absolute_error(y, clipped_preds))
-        rmse = float(root_mean_squared_error(y, clipped_preds))
-        r2 = float(r2_score(y, clipped_preds))
+        mae = float(mean_absolute_error(y_train, clipped_preds))
+        rmse = float(root_mean_squared_error(y_train, clipped_preds))
+        r2 = float(r2_score(y_train, clipped_preds))
 
         # Serialisera till disk som fallback
-        try:
+        with suppress(Exception):
             self.model_path.parent.mkdir(parents=True, exist_ok=True)
             joblib.dump(pipeline, self.model_path)
-        except Exception:
-            pass
 
         return {
             "status": "success",
-            "trained_samples": int(len(train_df)),
+            "trained_samples": len(train_df),
             "mae": round(mae, 3),
             "rmse": round(rmse, 3),
             "r2": round(r2, 3),
@@ -159,7 +156,7 @@ class WorkoutDifficultyPredictor:
         if df.empty:
             return np.array([], dtype=np.float64)
 
-        X = self._prepare_features(df)
-        raw_preds = self.pipeline.predict(X)
+        features = self._prepare_features(df)
+        raw_preds = self.pipeline.predict(features)
         clipped = np.clip(raw_preds, 1.0, 10.0)
         return np.round(clipped, 1).astype(np.float64)
