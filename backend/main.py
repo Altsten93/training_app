@@ -170,9 +170,61 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
         _cache["data"] = None
         _cache["timestamp"] = 0.0
 
+    # 4. Hämta uppdaterade rader från Supabase för tvåvägssynk
+    updates: dict[str, list[dict[str, Any]]] = {
+        "Chest": [],
+        "Back": [],
+        "Legs": [],
+    }
+
+    all_workouts_resp = (
+        supabase.table("workouts")
+        .select("*")
+        .eq("user_id", payload.user_id)
+        .execute()
+    )
+    all_rows: list[dict[str, Any]] = cast(
+        list[dict[str, Any]], all_workouts_resp.data or []
+    )
+
+    for r in all_rows:
+        is_done = bool(r.get("completed"))
+        has_ml = r.get("ml_predicted_difficulty") is not None
+        if not (is_done or has_ml):
+            continue
+
+        cat = str(r.get("category", ""))
+        if cat not in updates:
+            updates[cat] = []
+
+        date_str = None
+        raw_wdate = r.get("workout_date")
+        if raw_wdate:
+            try:
+                date_str = (
+                    datetime.strptime(str(raw_wdate).strip(), "%Y-%m-%d")
+                    .replace(tzinfo=timezone.utc)
+                    .strftime("%d/%m/%Y")
+                )
+            except ValueError:
+                date_str = str(raw_wdate)
+
+        update_item: dict[str, Any] = {
+            "row_index": r.get("row_index"),
+            "date": date_str,
+            "completed": "Ja" if is_done else "Nej",
+            "difficulty": r.get("difficulty"),
+            "ml_difficulty": r.get("ml_predicted_difficulty"),
+        }
+        updates[cat].append(update_item)
+
+    for items in updates.values():
+        items.sort(key=lambda x: int(x.get("row_index") or 0))
+
     return {
         "status": "success",
-        "total_records": len(records_to_save)
+        "total_records": len(records_to_save),
+        "updates": updates,
     }
 
 
