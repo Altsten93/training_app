@@ -1,10 +1,8 @@
 import asyncio
 import os
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
-import numpy as np
-import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,7 +38,7 @@ WORKOUT_ORDER = ["Chest", "Back", "Legs"]
 
 CACHE_TTL_SECONDS = 60
 _cache: dict[str, Any] = {
-    "df": None,
+    "data": None,
     "timestamp": 0.0
 }
 _cache_lock = asyncio.Lock()
@@ -67,7 +65,7 @@ def parse_swedish_date(date_str: str) -> str | None:
     date_str = date_str.strip()
     for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(date_str, fmt).date().isoformat()
+            return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc).date().isoformat()
         except ValueError:
             continue
     return None
@@ -161,7 +159,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 on_conflict="user_id,category,row_index"
             ).execute()
 
-        _cache["df"] = None
+        _cache["data"] = None
         _cache["timestamp"] = 0.0
 
     return {
@@ -187,41 +185,24 @@ def get_funny_message(days_since: int | None) -> str:
     return ""
 
 
-async def fetch_workouts_df(force_refresh: bool = False, user_id: str = "Altsten93") -> pd.DataFrame:
+async def fetch_workouts(force_refresh: bool = False, user_id: str = "Altsten93") -> list[dict[str, Any]]:
     """Hämtar pass från Supabase-tabellen workouts med caching."""
     async with _cache_lock:
-        now = datetime.now().timestamp()
-        if not force_refresh and _cache["df"] is not None and (now - _cache["timestamp"]) < CACHE_TTL_SECONDS:
-            return _cache["df"].copy()
+        now = datetime.now(timezone.utc).timestamp()
+        cached_data = _cache.get("data")
+        if (
+            not force_refresh
+            and isinstance(cached_data, list)
+            and (now - float(_cache.get("timestamp", 0.0))) < CACHE_TTL_SECONDS
+        ):
+            return cast(list[dict[str, Any]], cached_data)
 
         resp = supabase.table("workouts").select("*").eq("user_id", user_id).execute()
-        data = resp.data or []
-        df = pd.DataFrame(data)
+        rows: list[dict[str, Any]] = cast(list[dict[str, Any]], resp.data or [])
 
-        if not df.empty:
-            df["parsed_date"] = pd.to_datetime(df["workout_date"], errors="coerce")
-            if "volume" not in df.columns:
-                df["volume"] = 0.0
-            else:
-                df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
-            if "completed" not in df.columns:
-                df["completed"] = False
-            else:
-                df["completed"] = df["completed"].astype(bool)
-            if "row_index" not in df.columns:
-                df["row_index"] = 0
-            else:
-                df["row_index"] = pd.to_numeric(df["row_index"], errors="coerce").fillna(0).astype(int)
-        else:
-            df = pd.DataFrame(columns=[
-                "id", "user_id", "category", "exercise", "row_index", "workout_date",
-                "completed", "weight_kg", "reps", "sets", "volume",
-                "intensity", "difficulty", "one_rm", "ml_predicted_difficulty", "parsed_date"
-            ])
-
-        _cache["df"] = df.copy()
+        _cache["data"] = rows
         _cache["timestamp"] = now
-        return df.copy()
+        return rows
 
 
 @app.get("/api/workout/next")
@@ -233,23 +214,26 @@ async def get_next_workout(
     Hämtar nästa schemalagda pass och räknar ut dagar sedan förra passet i samma kategori.
     Om group_index utelämnas väljs den muskelgrupp som tränades längst sedan automatiskt.
     """
-    df = await fetch_workouts_df(force_refresh=force_refresh, user_id="Altsten93")
+    workouts = await fetch_workouts(force_refresh=force_refresh, user_id="Altsten93")
 
     # 1. Identifiera senaste genomförda datum för respektive grupp
-    completed = df[df["completed"] & df["parsed_date"].notna()]
+    completed = [w for w in workouts if w.get("completed") and w.get("workout_date")]
     last_dates: dict[str, datetime | None] = {}
     for group in WORKOUT_ORDER:
-        group_completed = completed[completed["category"] == group]
-        if not group_completed.empty:
-            last_dates[group] = group_completed["parsed_date"].max()
-        else:
-            last_dates[group] = None
+        group_dates: list[datetime] = []
+        for w in completed:
+            if w.get("category") == group:
+                try:
+                    group_dates.append(datetime.strptime(str(w["workout_date"]).strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc))
+                except ValueError:
+                    pass
+        last_dates[group] = max(group_dates) if group_dates else None
 
     # 2. Välj grupp
     if group_index is None:
         sorted_groups = sorted(
             WORKOUT_ORDER,
-            key=lambda g: (last_dates[g] is not None, last_dates[g] or datetime.min)
+            key=lambda g: (last_dates[g] is not None, last_dates[g] or datetime.min.replace(tzinfo=timezone.utc))
         )
         selected_group = sorted_groups[0]
         active_group_index = WORKOUT_ORDER.index(selected_group)
@@ -258,12 +242,16 @@ async def get_next_workout(
         selected_group = WORKOUT_ORDER[active_group_index]
 
     # 3. Hämta första oavslutade passet i den valda gruppen sorterat på row_index ASC
-    uncompleted = df[(df["category"] == selected_group) & (~df["completed"])].sort_values("row_index")
+    uncompleted = [
+        w for w in workouts
+        if w.get("category") == selected_group and not w.get("completed", False)
+    ]
+    uncompleted.sort(key=lambda w: int(w.get("row_index") or 0))
 
     last_date = last_dates.get(selected_group)
-    days_since = (datetime.now().date() - last_date.date()).days if last_date and pd.notna(last_date) else None
+    days_since = (datetime.now(timezone.utc).date() - last_date.date()).days if last_date else None
 
-    if uncompleted.empty:
+    if not uncompleted:
         return {
             "allCompleted": True,
             "groupIndex": active_group_index,
@@ -272,14 +260,14 @@ async def get_next_workout(
             "message": "Alla pass i denna kategori är slutförda!"
         }
 
-    next_row = uncompleted.iloc[0]
+    next_row = uncompleted[0]
 
     exercises = [
         {
-            "name": str(next_row["exercise"]) if pd.notna(next_row.get("exercise")) else TAB_EXERCISE_MAPPING.get(selected_group, selected_group),
-            "kg": str(next_row["weight_kg"]) if pd.notna(next_row.get("weight_kg")) else "0",
-            "reps": str(next_row["reps"]) if pd.notna(next_row.get("reps")) else "0",
-            "sets": str(next_row["sets"]) if pd.notna(next_row.get("sets")) else "0",
+            "name": str(next_row.get("exercise") or TAB_EXERCISE_MAPPING.get(selected_group, selected_group)),
+            "kg": str(next_row.get("weight_kg", 0.0)),
+            "reps": str(next_row.get("reps", 0)),
+            "sets": str(next_row.get("sets", 0)),
         }
     ]
 
@@ -287,7 +275,7 @@ async def get_next_workout(
         "allCompleted": False,
         "groupIndex": active_group_index,
         "workoutType": selected_group,
-        "originalRowIndex": int(next_row["row_index"]),
+        "originalRowIndex": int(next_row.get("row_index") or 0),
         "daysSinceLastWorkout": days_since,
         "message": get_funny_message(days_since),
         "exercises": exercises
@@ -303,58 +291,79 @@ async def get_dashboard(force_refresh: bool = Query(False)) -> dict[str, Any]:
     - Totalt antal genomförda pass (Bar chart)
     - Normaliserad intensitet vs svårighetsgrad (Adaption chart)
     """
-    df = await fetch_workouts_df(force_refresh=force_refresh, user_id="Altsten93")
-    completed = df[df["completed"] & df["parsed_date"].notna()].copy()
+    workouts = await fetch_workouts(force_refresh=force_refresh, user_id="Altsten93")
 
-    if completed.empty:
+    completed_workouts: list[tuple[dict[str, Any], datetime]] = []
+    for w in workouts:
+        if w.get("completed") and w.get("workout_date"):
+            try:
+                d = datetime.strptime(str(w["workout_date"]).strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                completed_workouts.append((w, d))
+            except ValueError:
+                pass
+
+    if not completed_workouts:
         return {"empty": True}
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     current_year, current_week, _ = now.isocalendar()
 
     # --- 1. Nuvarande veckovolym ---
-    completed["iso_year"] = completed["parsed_date"].dt.isocalendar().year
-    completed["iso_week"] = completed["parsed_date"].dt.isocalendar().week
+    weekly_by_type: dict[str, float] = {"Chest": 0.0, "Back": 0.0, "Legs": 0.0}
+    for w, d in completed_workouts:
+        y, wk, _ = d.isocalendar()
+        if y == current_year and wk == current_week:
+            cat = str(w.get("category", ""))
+            if cat in weekly_by_type:
+                try:
+                    vol = float(w.get("volume") or 0.0)
+                except (ValueError, TypeError):
+                    vol = 0.0
+                weekly_by_type[cat] += vol
 
-    current_week_df = completed[
-        (completed["iso_year"] == current_year) &
-        (completed["iso_week"] == current_week)
-    ]
-
-    weekly_by_type = {"Chest": 0.0, "Back": 0.0, "Legs": 0.0}
-    for w_type in WORKOUT_ORDER:
-        vol = current_week_df[current_week_df["category"] == w_type]["volume"].sum()
-        weekly_by_type[w_type] = round(float(vol), 1)
+    weekly_by_type = {k: round(v, 1) for k, v in weekly_by_type.items()}
 
     current_week_total = sum(weekly_by_type.values())
     percentage = min(round((current_week_total / WEEKLY_GOAL_KG) * 100, 1), 100.0)
     remaining_vol = max(0.0, round(WEEKLY_GOAL_KG - current_week_total, 1))
 
     # --- 2. Rullande 6-veckors volym ---
-    completed["year_week"] = (
-        completed["iso_year"].astype(str) + "-W" +
-        completed["iso_week"].astype(str).str.zfill(2)
-    )
+    all_year_weeks_set: set[str] = set()
+    week_cat_vol: dict[tuple[str, str], float] = {}
+    for w, d in completed_workouts:
+        y, wk, _ = d.isocalendar()
+        yw = f"{y}-W{wk:02d}"
+        all_year_weeks_set.add(yw)
+        cat = str(w.get("category", ""))
+        try:
+            vol = float(w.get("volume") or 0.0)
+        except (ValueError, TypeError):
+            vol = 0.0
+        week_cat_vol[(yw, cat)] = week_cat_vol.get((yw, cat), 0.0) + vol
 
-    pivot_vol = completed.pivot_table(
-        index="year_week", columns="category", values="volume", aggfunc="sum"
-    ).fillna(0)
+    sorted_weeks = sorted(all_year_weeks_set)
+    rolling_by_cat: dict[str, list[float]] = {cat: [] for cat in WORKOUT_ORDER}
+    for i in range(len(sorted_weeks)):
+        window_weeks = sorted_weeks[max(0, i - 5) : i + 1]
+        for cat in WORKOUT_ORDER:
+            vols = [week_cat_vol.get((w_k, cat), 0.0) for w_k in window_weeks]
+            avg = round(sum(vols) / len(vols), 1)
+            rolling_by_cat[cat].append(avg)
 
-    rolling_vol = pivot_vol.rolling(window=6, min_periods=1).mean().round(1)
+    if len(sorted_weeks) > 12:
+        all_weeks = sorted_weeks[-12:]
+        for cat in WORKOUT_ORDER:
+            rolling_by_cat[cat] = rolling_by_cat[cat][-12:]
+    else:
+        all_weeks = sorted_weeks
 
-    all_weeks = [str(w) for w in rolling_vol.index]
-    if len(all_weeks) > 12:
-        all_weeks = all_weeks[-12:]
-    rolling_vol = rolling_vol.loc[all_weeks]
-
-    volume_datasets = []
     colors = {"Chest": "#48BB78", "Back": "#F56565", "Legs": "#4299E1"}
+    volume_datasets: list[dict[str, Any]] = []
 
     for w_type in WORKOUT_ORDER:
-        data = [float(x) for x in rolling_vol[w_type].values] if w_type in rolling_vol.columns else [0.0] * len(all_weeks)
         volume_datasets.append({
             "label": f"{w_type} Volume (6-Week Avg)",
-            "data": data,
+            "data": rolling_by_cat[w_type],
             "borderColor": colors[w_type],
             "borderWidth": 2,
             "fill": False,
@@ -362,57 +371,60 @@ async def get_dashboard(force_refresh: bool = Query(False)) -> dict[str, Any]:
         })
 
     # --- 3. Pass per kategori (Total Sessions) ---
-    session_counts = completed["category"].value_counts().to_dict()
-    sessions_data = {
+    session_counts: dict[str, int] = {
+        cat: sum(1 for w, _ in completed_workouts if w.get("category") == cat)
+        for cat in WORKOUT_ORDER
+    }
+    sessions_data: dict[str, Any] = {
         "labels": WORKOUT_ORDER,
-        "data": [int(session_counts.get(w_type, 0)) for w_type in WORKOUT_ORDER]
+        "data": [session_counts[cat] for cat in WORKOUT_ORDER]
     }
 
     # --- 4. Adaptionsgraf (Senaste 12 månaderna) ---
     adaption_window_start = now - timedelta(days=365)
-    recent_df = completed[completed["parsed_date"] >= adaption_window_start].copy()
+    recent_workouts = [(w, d) for w, d in completed_workouts if d >= adaption_window_start]
 
-    adaption_mapping = {
+    adaption_mapping: dict[str, dict[str, Any]] = {
         "Chest": {"color": "#FFD700", "dash": [5, 5]},
         "Back": {"color": "#9370DB", "dash": [2, 3]},
         "Legs": {"color": "#00BFFF", "dash": [10, 3]},
     }
 
-    adaption_points = []
-    for _, row in recent_df.iterrows():
-        w_type = str(row["category"])
-        if w_type not in adaption_mapping:
+    pts: list[dict[str, Any]] = []
+    for w, d in recent_workouts:
+        cat = str(w.get("category", ""))
+        if cat not in adaption_mapping:
             continue
 
         try:
-            val_int = float(row["intensity"]) if "intensity" in row and pd.notna(row["intensity"]) else np.nan
-            val_diff = float(row["difficulty"]) if "difficulty" in row and pd.notna(row["difficulty"]) else np.nan
-
-            if not np.isnan(val_int) and not np.isnan(val_diff):
-                adaption_points.append({
-                    "date": row["parsed_date"],
-                    "workoutType": w_type,
+            val_int = float(w["intensity"]) if w.get("intensity") is not None else None
+            val_diff = float(w["difficulty"]) if w.get("difficulty") is not None else None
+            if val_int is not None and val_diff is not None:
+                pts.append({
+                    "date": d,
+                    "workoutType": cat,
                     "intensity": val_int,
                     "difficulty": val_diff
                 })
         except (ValueError, TypeError):
             continue
 
-    adaption_datasets = []
-    if adaption_points:
-        ad_df = pd.DataFrame(adaption_points)
+    adaption_datasets: list[dict[str, Any]] = []
+    if pts:
+        min_int = min(p["intensity"] for p in pts)
+        max_int = max(p["intensity"] for p in pts)
+        min_diff = min(p["difficulty"] for p in pts)
+        max_diff = max(p["difficulty"] for p in pts)
 
-        min_int, max_int = float(ad_df["intensity"].min()), float(ad_df["intensity"].max())
-        min_diff, max_diff = float(ad_df["difficulty"].min()), float(ad_df["difficulty"].max())
-
-        ad_df["norm_intensity"] = 0.5 if min_int == max_int else (ad_df["intensity"] - min_int) / (max_int - min_int)
-        ad_df["norm_difficulty"] = 0.5 if min_diff == max_diff else (ad_df["difficulty"] - min_diff) / (max_diff - min_diff)
-        ad_df["adaption"] = (ad_df["norm_intensity"] - ad_df["norm_difficulty"]).round(3)
+        for p in pts:
+            norm_int = 0.5 if min_int == max_int else (p["intensity"] - min_int) / (max_int - min_int)
+            norm_diff = 0.5 if min_diff == max_diff else (p["difficulty"] - min_diff) / (max_diff - min_diff)
+            p["adaption"] = round(norm_int - norm_diff, 3)
 
         for w_type in WORKOUT_ORDER:
-            type_df = ad_df[ad_df["workoutType"] == w_type].sort_values("date")
-            if not type_df.empty:
-                chart_data = [{"x": d.strftime("%Y-%m-%d"), "y": float(y)} for d, y in zip(type_df["date"], type_df["adaption"])]
+            cat_pts = sorted([p for p in pts if p["workoutType"] == w_type], key=lambda x: x["date"])
+            if cat_pts:
+                chart_data: list[dict[str, Any]] = [{"x": p["date"].strftime("%Y-%m-%d"), "y": float(p["adaption"])} for p in cat_pts]
                 adaption_datasets.append({
                     "label": f"{w_type}_adaption",
                     "data": chart_data,
