@@ -161,6 +161,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
     }
 
     records_to_save: list[dict[str, Any]] = []
+    app_completed_to_sync: set[tuple[str, int]] = set()
 
     # 3. Iterera genom flikar (Chest, Back, Legs)
     for tab_name, tab_data in payload.tabs.items():
@@ -223,25 +224,57 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 sheet_diff = None
 
             # Utförandedata:
-            sheet_is_completed = completed_str in ("ja", "yes", "true", "1")
+            sheet_has_ja = completed_str in ("ja", "yes", "true", "1")
+            sheet_has_nej = completed_str in ("nej", "no", "false")
             sheet_has_manual_date = workout_date is not None
 
-            if existing_row and existing_row.get("completed"):
-                # Passet är redan markerat som completed i Supabase (från appen)
-                # Om arket manuellt har Completed == "Ja" OCH ett manuellt datum i kolumn A, låt arkets värde gälla
-                if sheet_is_completed and sheet_has_manual_date:
-                    is_completed = True
-                    final_workout_date = workout_date
-                    final_difficulty = sheet_diff if sheet_diff is not None else existing_row.get("difficulty")
-                else:
-                    # Behåll Supabase-värdena från appen
-                    is_completed = True
-                    final_workout_date = existing_row.get("workout_date")
-                    final_difficulty = existing_row.get("difficulty")
+            app_completed = bool(
+                existing_row
+                and existing_row.get("completed")
+                and existing_row.get("workout_date")
+            )
+            row_updated_by_app = False
+
+            if not sheet_has_manual_date and not sheet_has_ja and app_completed:
+                # Arket saknar datum och har inte Ja, men passet har genomförts i appen sedan förra synken
+                # Behåll appens genomförda datum och sätt completed = True så att arket uppdateras med gympasset
+                final_completed = True
+                final_workout_date = (
+                    str(existing_row["workout_date"]) if existing_row else None
+                )
+                final_difficulty = (
+                    sheet_diff
+                    if sheet_diff is not None
+                    else (existing_row.get("difficulty") if existing_row else None)
+                )
+                row_updated_by_app = True
+            elif sheet_has_manual_date:
+                # Arket har ett explicit datum -> arket är master och skriver över Supabase
+                final_completed = not sheet_has_nej
+                final_workout_date = workout_date
+                final_difficulty = (
+                    sheet_diff
+                    if sheet_diff is not None
+                    else (existing_row.get("difficulty") if existing_row else None)
+                )
+            elif sheet_has_ja:
+                # Arket är markerat som Ja (utan datum) -> sätt dagens datum och markera som klart
+                final_completed = True
+                final_workout_date = (
+                    str(existing_row.get("workout_date"))
+                    if existing_row and existing_row.get("workout_date")
+                    else datetime.now(timezone.utc).date().isoformat()
+                )
+                final_difficulty = (
+                    sheet_diff
+                    if sheet_diff is not None
+                    else (existing_row.get("difficulty") if existing_row else None)
+                )
             else:
-                is_completed = sheet_is_completed
-                final_workout_date = workout_date if is_completed else None
-                final_difficulty = sheet_diff if (is_completed and sheet_diff is not None) else None
+                # Oavslutat planerat pass
+                final_completed = False
+                final_workout_date = None
+                final_difficulty = None
 
             if final_difficulty is not None and final_difficulty <= 0:
                 final_difficulty = None
@@ -268,7 +301,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 "row_index": idx,
                 "exercise": exercise_name,
                 "workout_date": final_workout_date,
-                "completed": is_completed,
+                "completed": final_completed,
                 "weight_kg": weight,
                 "reps": reps,
                 "sets": sets,
@@ -279,6 +312,9 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 "ml_predicted_difficulty": ml_difficulty,
             }
             records_to_save.append(record)
+
+            if row_updated_by_app:
+                app_completed_to_sync.add((tab_name, idx))
 
     # 4. Deduplicera och kör batch-upsert till Supabase
     if records_to_save:
@@ -397,14 +433,19 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             except ValueError:
                 date_str = str(raw_wdate)
 
-        # Skicka ALDRIG null eller 0 för difficulty eller date till kalkylarket!
-        # Skicka enbart rader där det finns ett faktiskt värde att skriva in i arket
-        if is_done and date_str:
+        # Skicka INTE tillbaka rader som arket redan skickade in med samma värden.
+        # Skicka enbart rader i updates där:
+        # a) Passet har slutförts i appen (arket skickade Nej/saknade datum, men appen hade loggat passet som klart)
+        # b) Oavslutade pass där ml_predicted_difficulty har beräknats för kolumn J
+        # Skicka ALDRIG fält som är None eller tomma!
+        row_idx = int(r.get("row_index") or 0)
+        if (cat, row_idx) in app_completed_to_sync:
             update_item: dict[str, Any] = {
-                "row_index": r.get("row_index"),
-                "date": date_str,
+                "row_index": row_idx,
                 "completed": "Ja",
             }
+            if date_str:
+                update_item["date"] = date_str
             if valid_difficulty is not None:
                 update_item["difficulty"] = valid_difficulty
             if valid_1rm is not None:
@@ -416,7 +457,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             # Oavslutat pass: inkludera ml_difficulty så att kolumn J uppdateras
             # Skicka INTE date eller difficulty!
             update_item: dict[str, Any] = {
-                "row_index": r.get("row_index"),
+                "row_index": row_idx,
                 "completed": "Nej",
                 "ml_difficulty": valid_ml,
             }
