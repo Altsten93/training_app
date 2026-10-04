@@ -3,12 +3,20 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from supabase import Client, create_client
+
+try:
+    from backend.ml.engine import WorkoutDifficultyPredictor
+except ImportError:
+    from ml.engine import WorkoutDifficultyPredictor
+
+predictor = WorkoutDifficultyPredictor()
 
 load_dotenv()  # Loads variables from .env locally
 
@@ -453,6 +461,99 @@ async def get_dashboard(force_refresh: bool = Query(False)) -> dict[str, Any]:
             "minDate": adaption_window_start.strftime("%Y-%m-%d"),
             "maxDate": now.strftime("%Y-%m-%d")
         }
+    }
+
+
+@app.post("/api/model/retrain")
+async def retrain_model() -> dict[str, Any]:
+    """Tränar om svårighetsgradsmodellen på historiska data från Supabase
+
+    och uppdaterar framtida oavslutade pass med nya prediktioner.
+    """
+    workouts = await fetch_workouts(force_refresh=True, user_id="Altsten93")
+    if not workouts:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Inga träningspass hittades för användaren.",
+        )
+
+    df = pd.DataFrame(workouts)
+
+    try:
+        metrics = predictor.train(df)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Fel vid träning av modellen: {e}",
+        ) from e
+
+    uncompleted = [w for w in workouts if not w.get("completed", False)]
+    updated_count = 0
+
+    if uncompleted:
+        uncompleted_df = pd.DataFrame(uncompleted)
+        preds = predictor.predict(uncompleted_df)
+
+        records_to_update: list[dict[str, Any]] = []
+        for idx, row in enumerate(uncompleted):
+            pred_val = float(preds[idx]) if idx < len(preds) else 6.0
+            int_pred = round(max(1.0, min(10.0, pred_val)))
+
+            raw_diff = row.get("difficulty")
+            diff_int = (
+                round(float(raw_diff))
+                if raw_diff is not None
+                and str(raw_diff).strip() != ""
+                and str(raw_diff).lower() != "nan"
+                else None
+            )
+
+            raw_one_rm = row.get("one_rm")
+            one_rm_float = (
+                float(raw_one_rm)
+                if raw_one_rm is not None
+                and str(raw_one_rm).strip() != ""
+                and str(raw_one_rm).lower() != "nan"
+                else None
+            )
+
+            record: dict[str, Any] = {
+                "user_id": str(row["user_id"]),
+                "category": str(row["category"]),
+                "row_index": int(row["row_index"]),
+                "exercise": str(row["exercise"]),
+                "workout_date": str(row["workout_date"]) if row.get("workout_date") else None,
+                "completed": False,
+                "weight_kg": float(row.get("weight_kg") or 0.0),
+                "reps": int(row.get("reps") or 0),
+                "sets": int(row.get("sets") or 0),
+                "volume": float(row.get("volume") or 0.0),
+                "intensity": float(row.get("intensity") or 0.0),
+                "difficulty": diff_int,
+                "one_rm": one_rm_float,
+                "ml_predicted_difficulty": int_pred,
+            }
+            records_to_update.append(record)
+
+        batch_size = 200
+        for i in range(0, len(records_to_update), batch_size):
+            chunk = records_to_update[i : i + batch_size]
+            supabase.table("workouts").upsert(
+                chunk,
+                on_conflict="user_id,category,row_index",
+            ).execute()
+
+        updated_count = len(records_to_update)
+
+        _cache["data"] = None
+        _cache["timestamp"] = 0.0
+
+    return {
+        "status": "success",
+        "trained_samples": metrics["trained_samples"],
+        "mae": metrics["mae"],
+        "updated_future_workouts": updated_count,
+        "serverMessage": f"MAE: {metrics['mae']} på {metrics['trained_samples']} pass. Uppdaterade {updated_count} framtida pass.",
     }
 
 

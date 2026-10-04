@@ -20,6 +20,7 @@ Thumbs.db
 *.csv
 *.xlsx
 *.xls
+*.joblib
 
 # Keep source files tracked, but ignore local working data
 # Uncomment if you want to track the CSV/XLSX files later:
