@@ -82,24 +82,52 @@ def parse_swedish_date(date_str: str) -> str | None:
     if not date_str:
         return None
     date_str = date_str.strip()
+    if date_str.lower() in ("nan", "none", "null", "30/12/1899", "1899-12-30", "30/04/1900", "0"):
+        return None
     for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc).date().isoformat()
+            parsed = datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc).date()
+            if parsed.year < 2000:
+                return None
+            return parsed.isoformat()
         except ValueError:
             continue
     return None
 
-def safe_float(val: Any, default: float = 0.0) -> float:
+
+def safe_float_opt(val: Any) -> float | None:
+    if val is None:
+        return None
+    s = str(val).strip().replace(",", ".").lower()
+    if s in ("", "nan", "none", "null", "undefined"):
+        return None
     try:
-        return float(str(val).replace(",", ".").strip())
+        return float(s)
     except (ValueError, TypeError):
-        return default
+        return None
+
+
+def safe_int_opt(val: Any) -> int | None:
+    if val is None:
+        return None
+    s = str(val).strip().lower()
+    if s in ("", "nan", "none", "null", "undefined"):
+        return None
+    try:
+        return round(float(s))
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_float(val: Any, default: float = 0.0) -> float:
+    res = safe_float_opt(val)
+    return res if res is not None else default
+
 
 def safe_int(val: Any, default: int = 0) -> int:
-    try:
-        return int(float(str(val).strip()))
-    except (ValueError, TypeError):
-        return default
+    res = safe_int_opt(val)
+    return res if res is not None else default
+
 
 def calculate_1rm(weight: float, reps: int) -> float:
     if reps <= 1:
@@ -113,9 +141,25 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
     if authorization != expected_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid sync token")
 
+    # 2. Hämta befintliga rader från Supabase för användaren innan bearbetning
+    existing_resp = (
+        supabase.table("workouts")
+        .select("*")
+        .eq("user_id", payload.user_id)
+        .execute()
+    )
+    existing_rows: list[dict[str, Any]] = cast(
+        list[dict[str, Any]], existing_resp.data or []
+    )
+    existing_map: dict[tuple[str, int], dict[str, Any]] = {
+        (str(r["category"]), int(r["row_index"])): r
+        for r in existing_rows
+        if r.get("category") and r.get("row_index") is not None
+    }
+
     records_to_save: list[dict[str, Any]] = []
 
-    # 2. Iterate through tabs (Chest, Back, Legs)
+    # 3. Iterera genom flikar (Chest, Back, Legs)
     for tab_name, tab_data in payload.tabs.items():
         exercise_name = TAB_EXERCISE_MAPPING.get(tab_name, tab_name)
 
@@ -123,72 +167,135 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             if not row:
                 continue
 
-            # Hoppa enbart över helt tomma rader
-            has_content = any(
-                str(cell).strip() != "" and str(cell).strip().lower() != "nan"
-                for cell in row
-                if cell is not None
-            )
-            if not has_content:
+            raw_date = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
+            workout_date = parse_swedish_date(raw_date)
+
+            completed_str = str(row[1]).strip().lower() if len(row) > 1 and row[1] is not None else ""
+            sheet_weight = safe_float_opt(row[2]) if len(row) > 2 else None
+            sheet_reps = safe_int_opt(row[3]) if len(row) > 3 else None
+            sheet_sets = safe_int_opt(row[4]) if len(row) > 4 else None
+
+            # Hoppa över rader helt om varken vikt, reps, sets eller status är ifyllt i kalkylarket
+            has_status = completed_str in ("ja", "yes", "true", "1", "nej", "no", "false")
+            has_weight = sheet_weight is not None and sheet_weight > 0
+            has_reps = sheet_reps is not None and sheet_reps > 0
+            has_sets = sheet_sets is not None and sheet_sets > 0
+
+            if not (has_status or has_weight or has_reps or has_sets):
                 continue
 
-            # Läs av kolumn A (Datum): Om row[0] finns och har ett datum, parsa det. Om tomt sätts workout_date = None.
-            raw_date = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
-            workout_date = parse_swedish_date(raw_date) if raw_date and raw_date.lower() != "nan" else None
+            existing_row = existing_map.get((tab_name, idx))
 
-            # Läs av kolumn B (Completed_workout): True om ja/yes/true/1, annars False.
-            completed_str = str(row[1]).strip().lower() if len(row) > 1 and row[1] is not None else ""
-            is_completed = completed_str in ("ja", "yes", "true", "1")
+            # Planeringsdata: Ta alltid värdet från Google Sheets om det är ifyllt (> 0)
+            weight = (
+                sheet_weight
+                if (sheet_weight is not None and sheet_weight > 0)
+                else (float(existing_row.get("weight_kg") or 0.0) if existing_row else 0.0)
+            )
+            reps = (
+                sheet_reps
+                if (sheet_reps is not None and sheet_reps > 0)
+                else (int(existing_row.get("reps") or 0) if existing_row else 0)
+            )
+            sets = (
+                sheet_sets
+                if (sheet_sets is not None and sheet_sets > 0)
+                else (int(existing_row.get("sets") or 0) if existing_row else 0)
+            )
+            sheet_volume = safe_float_opt(row[5]) if len(row) > 5 else None
+            volume = (
+                sheet_volume
+                if (sheet_volume is not None and sheet_volume > 0)
+                else (weight * reps * sets)
+            )
+            intensity = (
+                safe_float(row[6])
+                if len(row) > 6
+                else (float(existing_row.get("intensity") or 0.0) if existing_row else 0.0)
+            )
 
-            weight = safe_float(row[2]) if len(row) > 2 else 0.0
-            reps = safe_int(row[3]) if len(row) > 3 else 0
-            sets = safe_int(row[4]) if len(row) > 4 else 0
-            volume = safe_float(row[5]) if len(row) > 5 else (weight * reps * sets)
-            intensity = safe_float(row[6]) if len(row) > 6 else 0.0
-            difficulty = safe_int(row[7]) if len(row) > 7 else None
-            one_rm = safe_float(row[8]) if len(row) > 8 and row[8] is not None and str(row[8]).strip() != "" else None
-            if (one_rm is None or one_rm <= 0.0) and weight > 0 and reps > 0:
+            # Svårighetsgrad från kalkylarket (enbart giltiga värden > 0, aldrig 0)
+            sheet_diff = safe_int_opt(row[7]) if len(row) > 7 else None
+            if sheet_diff is not None and sheet_diff <= 0:
+                sheet_diff = None
+
+            # Utförandedata:
+            sheet_is_completed = completed_str in ("ja", "yes", "true", "1")
+            sheet_has_manual_date = workout_date is not None
+
+            if existing_row and existing_row.get("completed"):
+                # Passet är redan markerat som completed i Supabase (från appen)
+                # Om arket manuellt har Completed == "Ja" OCH ett manuellt datum i kolumn A, låt arkets värde gälla
+                if sheet_is_completed and sheet_has_manual_date:
+                    is_completed = True
+                    final_workout_date = workout_date
+                    final_difficulty = sheet_diff if sheet_diff is not None else existing_row.get("difficulty")
+                else:
+                    # Behåll Supabase-värdena från appen
+                    is_completed = True
+                    final_workout_date = existing_row.get("workout_date")
+                    final_difficulty = existing_row.get("difficulty")
+            else:
+                is_completed = sheet_is_completed
+                final_workout_date = workout_date if is_completed else None
+                final_difficulty = sheet_diff if (is_completed and sheet_diff is not None) else None
+
+            if final_difficulty is not None and final_difficulty <= 0:
+                final_difficulty = None
+
+            # 1RM
+            sheet_one_rm = safe_float_opt(row[8]) if len(row) > 8 else None
+            if sheet_one_rm is not None and sheet_one_rm > 0:
+                one_rm = sheet_one_rm
+            elif weight > 0 and reps > 0:
                 one_rm = calculate_1rm(weight, reps)
-            ml_difficulty = safe_int(row[9]) if len(row) > 9 else None
+            elif existing_row and existing_row.get("one_rm"):
+                one_rm = float(existing_row["one_rm"])
+            else:
+                one_rm = None
+
+            sheet_ml = safe_int_opt(row[9]) if len(row) > 9 else None
+            ml_difficulty = sheet_ml if (sheet_ml is not None and sheet_ml > 0) else None
+            if ml_difficulty is None and existing_row and existing_row.get("ml_predicted_difficulty"):
+                ml_difficulty = int(existing_row["ml_predicted_difficulty"])
 
             record: dict[str, Any] = {
                 "user_id": payload.user_id,
                 "category": tab_name,
                 "row_index": idx,
                 "exercise": exercise_name,
-                "workout_date": workout_date,
+                "workout_date": final_workout_date,
                 "completed": is_completed,
                 "weight_kg": weight,
                 "reps": reps,
                 "sets": sets,
                 "volume": volume,
                 "intensity": intensity,
-                "difficulty": difficulty,
+                "difficulty": final_difficulty,
                 "one_rm": one_rm,
-                "ml_predicted_difficulty": ml_difficulty
+                "ml_predicted_difficulty": ml_difficulty,
             }
             records_to_save.append(record)
 
-    # 3. Deduplicera så att samma rad inte skickas två gånger i samma batch
+    # 4. Deduplicera och kör batch-upsert till Supabase
     if records_to_save:
         unique_records = list({
             (r["user_id"], r["category"], r["row_index"]): r
             for r in records_to_save
         }.values())
 
-        # Skicka i batcher om 200 rader
         batch_size = 200
         for i in range(0, len(unique_records), batch_size):
             chunk = unique_records[i : i + batch_size]
             supabase.table("workouts").upsert(
                 chunk,
-                on_conflict="user_id,category,row_index"
+                on_conflict="user_id,category,row_index",
             ).execute()
 
         _cache["data"] = None
         _cache["timestamp"] = 0.0
 
-    # 4. Hämta rader från Supabase, kör ML-prediktion för oavslutade pass och bygg updates för tvåvägssynk
+    # 5. Hämta rader från Supabase, kör ML-prediktion för oavslutade pass och uppdatera Supabase
     all_workouts_resp = (
         supabase.table("workouts")
         .select("*")
@@ -242,6 +349,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 on_conflict="user_id,category,row_index",
             ).execute()
 
+    # 6. Bygg returstruktur updates för kalkylarket
     updates: dict[str, list[dict[str, Any]]] = {
         "Chest": [],
         "Back": [],
@@ -249,17 +357,33 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
     }
 
     for r in all_rows:
-        is_done = bool(r.get("completed"))
-        has_ml = r.get("ml_predicted_difficulty") is not None
-        if not (is_done or has_ml):
-            continue
-
         cat = str(r.get("category", ""))
         if cat not in updates:
             updates[cat] = []
 
-        date_str = None
+        is_done = bool(r.get("completed"))
+        raw_diff = r.get("difficulty")
+        raw_ml = r.get("ml_predicted_difficulty")
         raw_wdate = r.get("workout_date")
+        raw_1rm = r.get("one_rm")
+
+        valid_difficulty = (
+            round(float(raw_diff))
+            if (raw_diff is not None and float(raw_diff) > 0)
+            else None
+        )
+        valid_ml = (
+            round(float(raw_ml))
+            if (raw_ml is not None and float(raw_ml) > 0)
+            else None
+        )
+        valid_1rm = (
+            round(float(raw_1rm), 2)
+            if (raw_1rm is not None and float(raw_1rm) > 0)
+            else None
+        )
+
+        date_str = None
         if raw_wdate:
             try:
                 date_str = (
@@ -270,15 +394,32 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             except ValueError:
                 date_str = str(raw_wdate)
 
-        update_item: dict[str, Any] = {
-            "row_index": r.get("row_index"),
-            "date": date_str,
-            "completed": "Ja" if is_done else "Nej",
-            "difficulty": r.get("difficulty"),
-            "one_rm": r.get("one_rm"),
-            "ml_difficulty": r.get("ml_predicted_difficulty"),
-        }
-        updates[cat].append(update_item)
+        # Skicka ALDRIG null eller 0 för difficulty eller date till kalkylarket!
+        # Skicka enbart rader där det finns ett faktiskt värde att skriva in i arket
+        if is_done and date_str:
+            update_item: dict[str, Any] = {
+                "row_index": r.get("row_index"),
+                "date": date_str,
+                "completed": "Ja",
+            }
+            if valid_difficulty is not None:
+                update_item["difficulty"] = valid_difficulty
+            if valid_1rm is not None:
+                update_item["one_rm"] = valid_1rm
+            if valid_ml is not None:
+                update_item["ml_difficulty"] = valid_ml
+            updates[cat].append(update_item)
+        elif not is_done and valid_ml is not None:
+            # Oavslutat pass: inkludera ml_difficulty så att kolumn J uppdateras
+            # Skicka INTE date eller difficulty!
+            update_item: dict[str, Any] = {
+                "row_index": r.get("row_index"),
+                "completed": "Nej",
+                "ml_difficulty": valid_ml,
+            }
+            if valid_1rm is not None:
+                update_item["one_rm"] = valid_1rm
+            updates[cat].append(update_item)
 
     for items in updates.values():
         items.sort(key=lambda x: int(x.get("row_index") or 0))
