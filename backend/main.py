@@ -4,9 +4,10 @@ from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+import httpx
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query, status
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,6 +34,7 @@ app.add_middleware(
 
 # Shared token to protect this endpoint from public calls
 SYNC_SECRET = os.getenv("SHEET_SYNC_SECRET", "MY_SUPER_SECRET_SYNC_TOKEN")
+GOOGLE_SHEETS_WEBHOOK_URL = os.getenv("GOOGLE_SHEETS_WEBHOOK_URL")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -545,8 +547,42 @@ async def get_next_workout(
     }
 
 
+async def notify_google_sheets(
+    category: str,
+    row_index: int,
+    date_str: str,
+    difficulty: int,
+    one_rm: float | None,
+) -> None:
+    """Pushar avklarat pass i realtid till Google Sheets via Webhook Web App."""
+    if not GOOGLE_SHEETS_WEBHOOK_URL:
+        return
+    try:
+        formatted_date = (
+            datetime.strptime(date_str, "%Y-%m-%d")
+            .replace(tzinfo=timezone.utc)
+            .strftime("%d/%m/%Y")
+        )
+    except ValueError:
+        formatted_date = date_str
+
+    payload: dict[str, Any] = {
+        "token": SYNC_SECRET,
+        "category": category,
+        "row_index": row_index,
+        "date": formatted_date,
+        "difficulty": difficulty,
+        "one_rm": one_rm,
+    }
+    async with httpx.AsyncClient() as client:
+        with suppress(Exception):
+            await client.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload, timeout=10.0)
+
+
 @app.post("/api/workout/complete")
-async def complete_workout(payload: WorkoutCompletePayload) -> dict[str, Any]:
+async def complete_workout(
+    payload: WorkoutCompletePayload, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
     """Markerar ett pass som slutfört i Supabase med datum och upplevd ansträngningsgrad."""
     category = payload.category or payload.workoutType
     row_index = (
@@ -569,13 +605,13 @@ async def complete_workout(payload: WorkoutCompletePayload) -> dict[str, Any]:
         if payload.workout_id:
             fetch_query = (
                 supabase.table("workouts")
-                .select("weight_kg, reps")
+                .select("weight_kg, reps, category, row_index")
                 .eq("id", payload.workout_id)
             )
         else:
             fetch_query = (
                 supabase.table("workouts")
-                .select("weight_kg, reps")
+                .select("weight_kg, reps, category, row_index")
                 .eq("user_id", payload.user_id)
                 .eq("category", category)
                 .eq("row_index", row_index)
@@ -594,6 +630,10 @@ async def complete_workout(payload: WorkoutCompletePayload) -> dict[str, Any]:
             r_reps = int(existing_row.get("reps") or 0)
             if w_kg > 0 and r_reps > 0:
                 calculated_one_rm = calculate_1rm(w_kg, r_reps)
+            if not category and existing_row.get("category"):
+                category = str(existing_row["category"])
+            if row_index is None and existing_row.get("row_index") is not None:
+                row_index = int(existing_row["row_index"])
 
         update_data: dict[str, Any] = {
             "completed": True,
@@ -635,6 +675,17 @@ async def complete_workout(payload: WorkoutCompletePayload) -> dict[str, Any]:
     # Invalidera/nollställ minnescachen så att /api/workout/next och /api/dashboard omedelbart återspeglar det avklarade passet
     _cache["data"] = None
     _cache["timestamp"] = 0.0
+
+    # Trigga bakgrundsuppgift mot Google Sheets Webhook
+    if category and row_index is not None:
+        background_tasks.add_task(
+            notify_google_sheets,
+            category=category,
+            row_index=row_index,
+            date_str=date_val,
+            difficulty=difficulty_val,
+            one_rm=calculated_one_rm,
+        )
 
     return {"status": "success", "message": "Workout completed successfully"}
 
