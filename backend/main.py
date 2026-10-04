@@ -11,6 +11,8 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, stat
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.requests import Request
+from starlette.responses import Response
 from supabase import Client, create_client
 
 try:
@@ -31,6 +33,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_cache_control_headers(request: Request, call_next: Any) -> Response:
+    response: Response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/index.html", "/app.js") or path.endswith((".js", ".html", ".css")):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 # Shared token to protect this endpoint from public calls
 SYNC_SECRET = os.getenv("SHEET_SYNC_SECRET", "MY_SUPER_SECRET_SYNC_TOKEN")

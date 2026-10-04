@@ -73,6 +73,7 @@ Chart.register(donutCenterTextPlugin);
 
 // --- INITIALISERING & EVENT LISTENERS ---
 document.addEventListener('DOMContentLoaded', async () => {
+    resetDifficultyRatingForm();
     await loadNextWorkout();
     await loadDashboard();
 });
@@ -175,7 +176,7 @@ document.getElementById('cancel-completion-btn')?.addEventListener('click', () =
 document.getElementById('difficulty-slider')?.addEventListener('input', (e) => {
     document.getElementById('difficulty-value').textContent = e.target.value;
     const btn = document.getElementById('submit-difficulty-btn');
-    if (btn && btn.textContent !== 'Sparar...') {
+    if (btn) {
         btn.disabled = false;
         btn.textContent = 'Submit Rating';
     }
@@ -217,7 +218,18 @@ let loaderTimeoutId = null;
 
 function switchView(viewId) {
     views.forEach(v => v.classList.remove('active'));
-    document.getElementById(viewId).classList.add('active');
+    const target = document.getElementById(viewId);
+    if (target) target.classList.add('active');
+
+    if (viewId === 'completion-view') {
+        resetDifficultyRatingForm();
+        const ratingSection = document.getElementById('difficulty-rating-section');
+        if (ratingSection) ratingSection.style.display = 'block';
+        const homeBtn = document.getElementById('home-from-completion-btn');
+        if (homeBtn) homeBtn.style.display = 'none';
+        const backBtn = document.getElementById('back-to-workout-btn');
+        if (backBtn) backBtn.style.display = 'inline-block';
+    }
 
     const loaderSubtext = document.getElementById('loader-subtext');
     if (loaderSubtext) {
