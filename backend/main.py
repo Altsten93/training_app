@@ -97,18 +97,27 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
     for tab_name, tab_data in payload.tabs.items():
         exercise_name = TAB_EXERCISE_MAPPING.get(tab_name, tab_name)
 
-        for row in tab_data.rows:
-            if not row or not row[0]:  # Skip empty lines
-                continue
-            
-            workout_date = parse_swedish_date(row[0])
-            if not workout_date:
+        for idx, row in enumerate(tab_data.rows, start=2):
+            if not row:
                 continue
 
-            # Map the 10 columns
-            completed_str = str(row[1]).strip().lower() if len(row) > 1 else ""
+            # Hoppa enbart över helt tomma rader
+            has_content = any(
+                str(cell).strip() != "" and str(cell).strip().lower() != "nan"
+                for cell in row
+                if cell is not None
+            )
+            if not has_content:
+                continue
+
+            # Läs av kolumn A (Datum): Om row[0] finns och har ett datum, parsa det. Om tomt sätts workout_date = None.
+            raw_date = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
+            workout_date = parse_swedish_date(raw_date) if raw_date and raw_date.lower() != "nan" else None
+
+            # Läs av kolumn B (Completed_workout): True om ja/yes/true/1, annars False.
+            completed_str = str(row[1]).strip().lower() if len(row) > 1 and row[1] is not None else ""
             is_completed = completed_str in ("ja", "yes", "true", "1")
-            
+
             weight = safe_float(row[2]) if len(row) > 2 else 0.0
             reps = safe_int(row[3]) if len(row) > 3 else 0
             sets = safe_int(row[4]) if len(row) > 4 else 0
@@ -121,6 +130,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             record: dict[str, Any] = {
                 "user_id": payload.user_id,
                 "category": tab_name,
+                "row_index": idx,
                 "exercise": exercise_name,
                 "workout_date": workout_date,
                 "completed": is_completed,
@@ -135,11 +145,10 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             }
             records_to_save.append(record)
 
- # 3. Deduplicera så att samma datum/övning inte skickas två gånger i samma batch
+    # 3. Deduplicera så att samma rad inte skickas två gånger i samma batch
     if records_to_save:
-        # Sparar senaste raden om samma datum förekommer flera gånger
         unique_records = list({
-            (r["user_id"], r["workout_date"], r["exercise"]): r
+            (r["user_id"], r["category"], r["row_index"]): r
             for r in records_to_save
         }.values())
 
@@ -149,7 +158,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             chunk = unique_records[i : i + batch_size]
             supabase.table("workouts").upsert(
                 chunk,
-                on_conflict="user_id,workout_date,exercise"
+                on_conflict="user_id,category,row_index"
             ).execute()
 
         _cache["df"] = None
@@ -199,9 +208,13 @@ async def fetch_workouts_df(force_refresh: bool = False, user_id: str = "Altsten
                 df["completed"] = False
             else:
                 df["completed"] = df["completed"].astype(bool)
+            if "row_index" not in df.columns:
+                df["row_index"] = 0
+            else:
+                df["row_index"] = pd.to_numeric(df["row_index"], errors="coerce").fillna(0).astype(int)
         else:
             df = pd.DataFrame(columns=[
-                "id", "user_id", "category", "exercise", "workout_date",
+                "id", "user_id", "category", "exercise", "row_index", "workout_date",
                 "completed", "weight_kg", "reps", "sets", "volume",
                 "intensity", "difficulty", "one_rm", "ml_predicted_difficulty", "parsed_date"
             ])
@@ -244,8 +257,8 @@ async def get_next_workout(
         active_group_index = group_index
         selected_group = WORKOUT_ORDER[active_group_index]
 
-    # 3. Hämta första oavslutade passet i den valda gruppen
-    uncompleted = df[(df["category"] == selected_group) & (~df["completed"])].sort_values("parsed_date")
+    # 3. Hämta första oavslutade passet i den valda gruppen sorterat på row_index ASC
+    uncompleted = df[(df["category"] == selected_group) & (~df["completed"])].sort_values("row_index")
 
     last_date = last_dates.get(selected_group)
     days_since = (datetime.now().date() - last_date.date()).days if last_date and pd.notna(last_date) else None
@@ -274,7 +287,7 @@ async def get_next_workout(
         "allCompleted": False,
         "groupIndex": active_group_index,
         "workoutType": selected_group,
-        "originalRowIndex": 0,
+        "originalRowIndex": int(next_row["row_index"]),
         "daysSinceLastWorkout": days_since,
         "message": get_funny_message(days_since),
         "exercises": exercises
