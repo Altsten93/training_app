@@ -148,18 +148,37 @@ document.getElementById('refresh-data-btn')?.addEventListener('click', async () 
     }
 });
 
+function resetDifficultyRatingForm() {
+    const btn = document.getElementById('submit-difficulty-btn');
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Submit Rating';
+    }
+    const slider = document.getElementById('difficulty-slider');
+    const valueDisplay = document.getElementById('difficulty-value');
+    if (slider) slider.value = '5';
+    if (valueDisplay) valueDisplay.textContent = '5';
+}
+
 document.getElementById('home-from-completion-btn')?.addEventListener('click', () => location.reload());
 
 document.getElementById('back-to-workout-btn')?.addEventListener('click', () => {
+    resetDifficultyRatingForm();
     switchView('workout-view');
 });
 
 document.getElementById('cancel-completion-btn')?.addEventListener('click', () => {
+    resetDifficultyRatingForm();
     switchView('workout-view');
 });
 
 document.getElementById('difficulty-slider')?.addEventListener('input', (e) => {
     document.getElementById('difficulty-value').textContent = e.target.value;
+    const btn = document.getElementById('submit-difficulty-btn');
+    if (btn && btn.textContent !== 'Sparar...') {
+        btn.disabled = false;
+        btn.textContent = 'Submit Rating';
+    }
 });
 
 document.getElementById('submit-difficulty-btn')?.addEventListener('click', () => {
@@ -177,6 +196,7 @@ workoutView.addEventListener('click', async (e) => {
     if (backBtn) {
         switchView('home-view');
     } else if (completeBtn) {
+        resetDifficultyRatingForm();
         document.getElementById('difficulty-rating-section').style.display = 'block';
         document.getElementById('home-from-completion-btn').style.display = 'none';
         const backToWorkoutBtn = document.getElementById('back-to-workout-btn');
@@ -252,15 +272,17 @@ async function skipWorkout(stayOnHome = false) {
 /** Slutför träningspass och sparar i Supabase via FastAPI */
 async function submitWorkoutCompletion(difficulty) {
     const btn = document.getElementById('submit-difficulty-btn');
+    if (!btn || btn.disabled) return;
+
     btn.disabled = true;
     btn.textContent = 'Sparar...';
 
     try {
         const payload = {
             user_id: "Altsten93",
-            category: currentWorkoutData.workoutType,
-            row_index: currentWorkoutData.originalRowIndex,
-            workout_id: currentWorkoutData.workout_id || null,
+            category: currentWorkoutData?.workoutType,
+            row_index: currentWorkoutData?.originalRowIndex,
+            workout_id: currentWorkoutData?.workout_id || null,
             difficulty: Math.round(Number(difficulty)),
         };
 
@@ -285,8 +307,9 @@ async function submitWorkoutCompletion(difficulty) {
         document.getElementById('home-from-completion-btn').style.display = 'block';
     } catch (err) {
         showTempNotification(err.message, "error");
-        btn.disabled = false;
-        btn.textContent = "Submit Rating";
+    } finally {
+        // Återställ alltid till initialt läge så att knappen aldrig fastnar i "Sparar..."
+        resetDifficultyRatingForm();
     }
 }
 
