@@ -1,5 +1,6 @@
 import asyncio
 import os
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -100,6 +101,11 @@ def safe_int(val: Any, default: int = 0) -> int:
     except (ValueError, TypeError):
         return default
 
+def calculate_1rm(weight: float, reps: int) -> float:
+    if reps <= 1:
+        return weight
+    return round(weight * (1.0 + reps / 30.0), 2)
+
 @app.post("/api/sync-sheet")
 async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Header(None)) -> dict[str, Any]:
     # 1. Verify authorization secret
@@ -140,7 +146,9 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             volume = safe_float(row[5]) if len(row) > 5 else (weight * reps * sets)
             intensity = safe_float(row[6]) if len(row) > 6 else 0.0
             difficulty = safe_int(row[7]) if len(row) > 7 else None
-            one_rm = safe_float(row[8]) if len(row) > 8 else None
+            one_rm = safe_float(row[8]) if len(row) > 8 and row[8] is not None and str(row[8]).strip() != "" else None
+            if (one_rm is None or one_rm <= 0.0) and weight > 0 and reps > 0:
+                one_rm = calculate_1rm(weight, reps)
             ml_difficulty = safe_int(row[9]) if len(row) > 9 else None
 
             record: dict[str, Any] = {
@@ -180,13 +188,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
         _cache["data"] = None
         _cache["timestamp"] = 0.0
 
-    # 4. Hämta uppdaterade rader från Supabase för tvåvägssynk
-    updates: dict[str, list[dict[str, Any]]] = {
-        "Chest": [],
-        "Back": [],
-        "Legs": [],
-    }
-
+    # 4. Hämta rader från Supabase, kör ML-prediktion för oavslutade pass och bygg updates för tvåvägssynk
     all_workouts_resp = (
         supabase.table("workouts")
         .select("*")
@@ -196,6 +198,55 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
     all_rows: list[dict[str, Any]] = cast(
         list[dict[str, Any]], all_workouts_resp.data or []
     )
+
+    uncompleted = [w for w in all_rows if not w.get("completed", False)]
+    if uncompleted:
+        completed_rows = [
+            w
+            for w in all_rows
+            if w.get("completed", False) and w.get("difficulty") is not None
+        ]
+        if len(completed_rows) >= 5:
+            with suppress(Exception):
+                predictor.train(pd.DataFrame(all_rows))
+
+        try:
+            preds = predictor.predict(pd.DataFrame(uncompleted))
+        except (RuntimeError, ValueError):
+            preds = [6.0] * len(uncompleted)
+
+        ml_updates: list[dict[str, Any]] = []
+        for idx_u, row_u in enumerate(uncompleted):
+            pred_val = float(preds[idx_u]) if idx_u < len(preds) else 6.0
+            int_pred = round(max(1.0, min(10.0, pred_val)))
+            row_u["ml_predicted_difficulty"] = int_pred
+            cat_str = str(row_u["category"])
+            exercise_str = str(
+                row_u.get("exercise") or TAB_EXERCISE_MAPPING.get(cat_str, cat_str)
+            )
+            update_entry: dict[str, Any] = {
+                "user_id": str(row_u["user_id"]),
+                "category": cat_str,
+                "row_index": int(row_u["row_index"]),
+                "exercise": exercise_str,
+                "ml_predicted_difficulty": int_pred,
+            }
+            if row_u.get("id"):
+                update_entry["id"] = row_u["id"]
+            ml_updates.append(update_entry)
+
+        for i in range(0, len(ml_updates), 200):
+            chunk = ml_updates[i : i + 200]
+            supabase.table("workouts").upsert(
+                chunk,
+                on_conflict="user_id,category,row_index",
+            ).execute()
+
+    updates: dict[str, list[dict[str, Any]]] = {
+        "Chest": [],
+        "Back": [],
+        "Legs": [],
+    }
 
     for r in all_rows:
         is_done = bool(r.get("completed"))
@@ -224,6 +275,7 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             "date": date_str,
             "completed": "Ja" if is_done else "Nej",
             "difficulty": r.get("difficulty"),
+            "one_rm": r.get("one_rm"),
             "ml_difficulty": r.get("ml_predicted_difficulty"),
         }
         updates[cat].append(update_item)
@@ -233,7 +285,6 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
 
     return {
         "status": "success",
-        "total_records": len(records_to_save),
         "updates": updates,
     }
 
@@ -373,13 +424,44 @@ async def complete_workout(payload: WorkoutCompletePayload) -> dict[str, Any]:
     date_val = payload.workout_date or datetime.now(timezone.utc).date().isoformat()
     difficulty_val = max(1, min(10, int(payload.difficulty)))
 
-    update_data: dict[str, Any] = {
-        "completed": True,
-        "workout_date": date_val,
-        "difficulty": difficulty_val,
-    }
-
     try:
+        if payload.workout_id:
+            fetch_query = (
+                supabase.table("workouts")
+                .select("weight_kg, reps")
+                .eq("id", payload.workout_id)
+            )
+        else:
+            fetch_query = (
+                supabase.table("workouts")
+                .select("weight_kg, reps")
+                .eq("user_id", payload.user_id)
+                .eq("category", category)
+                .eq("row_index", row_index)
+            )
+        existing_resp = fetch_query.execute()
+        existing_rows: list[dict[str, Any]] = cast(
+            list[dict[str, Any]], existing_resp.data or []
+        )
+        existing_row: dict[str, Any] | None = (
+            existing_rows[0] if existing_rows else None
+        )
+
+        calculated_one_rm: float | None = None
+        if existing_row is not None:
+            w_kg = float(existing_row.get("weight_kg") or 0.0)
+            r_reps = int(existing_row.get("reps") or 0)
+            if w_kg > 0 and r_reps > 0:
+                calculated_one_rm = calculate_1rm(w_kg, r_reps)
+
+        update_data: dict[str, Any] = {
+            "completed": True,
+            "workout_date": date_val,
+            "difficulty": difficulty_val,
+        }
+        if calculated_one_rm is not None:
+            update_data["one_rm"] = calculated_one_rm
+
         if payload.workout_id:
             query = (
                 supabase.table("workouts")
