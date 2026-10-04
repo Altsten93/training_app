@@ -249,24 +249,28 @@ async function skipWorkout(stayOnHome = false) {
     await loadNextWorkout(currentGroupIndex, { returnToHome: stayOnHome });
 }
 
-/** Slutför träningspass och sparar i Google Sheets via FastAPI */
+/** Slutför träningspass och sparar i Supabase via FastAPI */
 async function submitWorkoutCompletion(difficulty) {
     const btn = document.getElementById('submit-difficulty-btn');
     btn.disabled = true;
     btn.textContent = 'Sparar...';
 
     try {
+        const payload = {
+            user_id: "Altsten93",
+            category: currentWorkoutData.workoutType,
+            row_index: currentWorkoutData.originalRowIndex,
+            workout_id: currentWorkoutData.workout_id || null,
+            difficulty: Math.round(Number(difficulty)),
+        };
+
         const res = await apiFetch(`/api/workout/complete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                workoutType: currentWorkoutData.workoutType,
-                originalRowIndex: currentWorkoutData.originalRowIndex,
-                difficulty: difficulty
-            })
+            body: JSON.stringify(payload)
         });
 
-        if (!res.ok) throw new Error("Misslyckades att spara i Google Sheets.");
+        if (!res.ok) throw new Error("Kunde inte spara passet i databasen.");
 
         // Hämta nästa pass automatiskt (groupIndex = null så att algoritmen väljer
         // den muskelgrupp som nu har gått längst sedan förra passet)
@@ -274,7 +278,7 @@ async function submitWorkoutCompletion(difficulty) {
 
         await renderCompletionProgress();
 
-        showTempNotification("Träningspasset är sparat!", "success");
+        showTempNotification("Passet loggat!", "success");
         document.getElementById('difficulty-rating-section').style.display = 'none';
         const backToWorkoutBtn = document.getElementById('back-to-workout-btn');
         if (backToWorkoutBtn) backToWorkoutBtn.style.display = 'none';

@@ -66,6 +66,16 @@ class SyncPayload(BaseModel):
     user_id: str
     tabs: dict[str, TabData]
 
+class WorkoutCompletePayload(BaseModel):
+    user_id: str = "Altsten93"
+    category: str | None = None
+    workoutType: str | None = None
+    row_index: int | None = None
+    originalRowIndex: int | None = None
+    workout_id: str | None = None
+    difficulty: int  # 1-10
+    workout_date: str | None = None  # ISO-datum YYYY-MM-DD
+
 def parse_swedish_date(date_str: str) -> str | None:
     """Parses DD/MM/YYYY or D/M/YYYY to ISO format YYYY-MM-DD."""
     if not date_str:
@@ -336,10 +346,74 @@ async def get_next_workout(
         "groupIndex": active_group_index,
         "workoutType": selected_group,
         "originalRowIndex": int(next_row.get("row_index") or 0),
+        "workout_id": str(next_row.get("id")) if next_row.get("id") else None,
         "daysSinceLastWorkout": days_since,
         "message": get_funny_message(days_since),
         "exercises": exercises
     }
+
+
+@app.post("/api/workout/complete")
+async def complete_workout(payload: WorkoutCompletePayload) -> dict[str, Any]:
+    """Markerar ett pass som slutfört i Supabase med datum och upplevd ansträngningsgrad."""
+    category = payload.category or payload.workoutType
+    row_index = (
+        payload.row_index
+        if payload.row_index is not None
+        else payload.originalRowIndex
+    )
+
+    if not payload.workout_id and (not category or row_index is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Antingen workout_id eller category och row_index måste anges.",
+        )
+
+    # Om workout_date inte skickas med, sätt det till dagens datum (YYYY-MM-DD)
+    date_val = payload.workout_date or datetime.now(timezone.utc).date().isoformat()
+    difficulty_val = max(1, min(10, int(payload.difficulty)))
+
+    update_data: dict[str, Any] = {
+        "completed": True,
+        "workout_date": date_val,
+        "difficulty": difficulty_val,
+    }
+
+    try:
+        if payload.workout_id:
+            query = (
+                supabase.table("workouts")
+                .update(update_data)
+                .eq("id", payload.workout_id)
+            )
+        else:
+            query = (
+                supabase.table("workouts")
+                .update(update_data)
+                .eq("user_id", payload.user_id)
+                .eq("category", category)
+                .eq("row_index", row_index)
+            )
+
+        resp = query.execute()
+        if not resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Kunde inte hitta passet att uppdatera i Supabase.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Fel vid uppdatering av pass i Supabase: {e}",
+        ) from e
+
+    # Invalidera/nollställ minnescachen så att /api/workout/next och /api/dashboard omedelbart återspeglar det avklarade passet
+    _cache["data"] = None
+    _cache["timestamp"] = 0.0
+
+    return {"status": "success", "message": "Workout completed successfully"}
 
 
 @app.get("/api/dashboard")
