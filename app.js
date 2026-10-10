@@ -549,13 +549,14 @@ function escapeHtml(value) {
     })[character]);
 }
 
-function renderUpcomingSessions(groups = []) {
-    if (!groups.length) return '';
+function renderUpcomingSessions(groups = [], category) {
+    const group = groups.find(item => item.category === category);
+    if (!group) return '';
 
     return `
         <section class="mt-5 bg-gray-800/90 border border-gray-700/80 rounded-2xl p-4 shadow-xl">
             <h3 class="text-lg font-bold text-white">Kommande träningspass</h3>
-            <p class="text-sm text-gray-400 mt-1 mb-3">De tre nästkommande planerade passen för varje muskelgrupp.</p>
+            <p class="text-sm text-gray-400 mt-1 mb-3">De tre nästkommande planerade passen för ${escapeHtml(group.category)}.</p>
             <div class="overflow-x-auto rounded-xl border border-gray-700">
                 <table class="w-full min-w-[36rem] text-sm text-left">
                     <thead class="bg-gray-900/80 text-gray-400 uppercase text-xs tracking-wide">
@@ -567,7 +568,7 @@ function renderUpcomingSessions(groups = []) {
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-700">
-                        ${groups.map(group => `
+                        ${[group].map(group => `
                             <tr class="bg-gray-800/70">
                                 <th scope="row" class="px-3 py-3 font-semibold text-white">${escapeHtml(group.category)}</th>
                                 ${[0, 1, 2].map(index => {
@@ -621,7 +622,7 @@ function renderWorkoutScreen(data) {
                 </div>
             </div>
         `}
-        ${renderUpcomingSessions(data.upcomingSessions)}
+        ${renderUpcomingSessions(data.upcomingSessions, data.workoutType)}
     `;
 }
 
