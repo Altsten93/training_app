@@ -75,3 +75,30 @@ def test_apply_overrides_marks_workout_completed():
     
     # Rensa
     COMPLETED_OVERRIDES.clear()
+
+
+def test_get_upcoming_sessions_returns_first_three_uncompleted_per_category():
+    import sys
+    from pathlib import Path
+    backend_dir = str(Path(__file__).resolve().parent)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    from main import get_upcoming_sessions
+
+    workouts = [
+        {'category': 'Chest', 'row_index': 4, 'exercise': 'Bench 4', 'completed': False},
+        {'category': 'Chest', 'row_index': 2, 'exercise': 'Bench 2', 'completed': False},
+        {'category': 'Chest', 'row_index': 1, 'exercise': 'Bench 1', 'completed': True},
+        {'category': 'Chest', 'row_index': 3, 'exercise': 'Bench 3', 'completed': False},
+        {'category': 'Chest', 'row_index': 5, 'exercise': 'Bench 5', 'completed': False},
+        {'category': 'Back', 'row_index': 1, 'exercise': 'Deadlift', 'completed': False},
+    ]
+
+    result = get_upcoming_sessions(workouts)
+
+    chest_sessions = next(group['sessions'] for group in result if group['category'] == 'Chest')
+    back_sessions = next(group['sessions'] for group in result if group['category'] == 'Back')
+    legs_sessions = next(group['sessions'] for group in result if group['category'] == 'Legs')
+    assert [session['name'] for session in chest_sessions] == ['Bench 2', 'Bench 3', 'Bench 4']
+    assert len(back_sessions) == 1
+    assert legs_sessions == []
