@@ -523,6 +523,30 @@ async def fetch_workouts(force_refresh: bool = False, user_id: str = "Altsten93"
         return rows
 
 
+def get_upcoming_sessions(workouts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Returnerar de tre närmaste oavslutade passen för varje muskelgrupp."""
+    upcoming_sessions = []
+    for category in WORKOUT_ORDER:
+        uncompleted = [
+            workout for workout in workouts
+            if workout.get("category") == category and not workout.get("completed", False)
+        ]
+        uncompleted.sort(key=lambda workout: int(workout.get("row_index") or 0))
+        upcoming_sessions.append({
+            "category": category,
+            "sessions": [
+                {
+                    "name": str(workout.get("exercise") or TAB_EXERCISE_MAPPING.get(category, category)),
+                    "kg": str(workout.get("weight_kg", 0.0)),
+                    "reps": str(workout.get("reps", 0)),
+                    "sets": str(workout.get("sets", 0)),
+                }
+                for workout in uncompleted[:3]
+            ],
+        })
+    return upcoming_sessions
+
+
 @app.get("/api/workout/next")
 async def get_next_workout(
     group_index: int | None = Query(None, ge=0, le=2),
@@ -575,7 +599,8 @@ async def get_next_workout(
             "groupIndex": active_group_index,
             "workoutType": selected_group,
             "nextWorkout": None,
-            "message": "Alla pass i denna kategori är slutförda!"
+            "message": "Alla pass i denna kategori är slutförda!",
+            "upcomingSessions": get_upcoming_sessions(workouts),
         }
 
     next_row = uncompleted[0]
@@ -597,7 +622,8 @@ async def get_next_workout(
         "workout_id": str(next_row.get("id")) if next_row.get("id") else None,
         "daysSinceLastWorkout": days_since,
         "message": get_funny_message(days_since),
-        "exercises": exercises
+        "exercises": exercises,
+        "upcomingSessions": get_upcoming_sessions(workouts),
     }
 
 

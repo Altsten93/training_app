@@ -539,6 +539,52 @@ function updateHomeHero(data) {
     }
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[character]);
+}
+
+function renderUpcomingSessions(groups = []) {
+    if (!groups.length) return '';
+
+    return `
+        <section class="mt-5 bg-gray-800/90 border border-gray-700/80 rounded-2xl p-4 shadow-xl">
+            <h3 class="text-lg font-bold text-white">Kommande träningspass</h3>
+            <p class="text-sm text-gray-400 mt-1 mb-3">De tre nästkommande planerade passen för varje muskelgrupp.</p>
+            <div class="overflow-x-auto rounded-xl border border-gray-700">
+                <table class="w-full min-w-[36rem] text-sm text-left">
+                    <thead class="bg-gray-900/80 text-gray-400 uppercase text-xs tracking-wide">
+                        <tr>
+                            <th scope="col" class="px-3 py-3">Muskelgrupp</th>
+                            <th scope="col" class="px-3 py-3">Nästa pass</th>
+                            <th scope="col" class="px-3 py-3">Pass 2</th>
+                            <th scope="col" class="px-3 py-3">Pass 3</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700">
+                        ${groups.map(group => `
+                            <tr class="bg-gray-800/70">
+                                <th scope="row" class="px-3 py-3 font-semibold text-white">${escapeHtml(group.category)}</th>
+                                ${[0, 1, 2].map(index => {
+                                    const session = group.sessions?.[index];
+                                    return `<td class="px-3 py-3 text-gray-300">${session
+                                        ? `<span class="font-medium text-white">${escapeHtml(session.name)}</span><br><span class="text-xs text-gray-400">${escapeHtml(session.kg)} kg · ${escapeHtml(session.sets)} × ${escapeHtml(session.reps)}</span>`
+                                        : '<span class="text-gray-600">—</span>'}</td>`;
+                                }).join('')}
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    `;
+}
+
 function renderWorkoutScreen(data) {
     updateHomeHero(data);
 
@@ -575,6 +621,7 @@ function renderWorkoutScreen(data) {
                 </div>
             </div>
         `}
+        ${renderUpcomingSessions(data.upcomingSessions)}
     `;
 }
 
