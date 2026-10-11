@@ -41,6 +41,8 @@ let progressPieChartInstance = null;
 let chartInstance = null;
 let exerciseChartInstance = null;
 let intensityDifficultyChartInstance = null;
+let volumeMuscleTimelineChartInstance = null;
+let volumeMuscleScatterChartInstance = null;
 
 const donutCenterTextPlugin = {
     id: 'donutCenterText',
@@ -139,9 +141,20 @@ document.getElementById('refresh-data-btn')?.addEventListener('click', async () 
     const icon = document.getElementById('refresh-icon');
     if (icon) icon.classList.add('animate-spin');
     try {
+        // Steg A: Kör Withings-synk i bakgrunden vid omladdning
+        try {
+            const withingsRes = await apiFetch('/api/withings/sync', { method: 'POST' });
+            const withingsData = await withingsRes.json();
+            if (withingsData.status === 'success' && withingsData.synced_rows > 0) {
+                console.log(`Withings: synkade ${withingsData.synced_rows} mätningar.`);
+            }
+        } catch (withingsErr) {
+            console.warn("Withings-synk misslyckades eller tajmade ut:", withingsErr);
+        }
+
         await loadNextWorkout(currentGroupIndex, { returnToHome: true });
         await loadDashboard();
-        showTempNotification("Data har synkats!", "success");
+        showTempNotification("Data & mätvärden har synkroniserats!", "success");
     } catch (e) {
         showTempNotification("Kunde inte synka data: " + e.message, "error");
     } finally {
@@ -364,6 +377,12 @@ async function loadDashboard() {
 
         // 4. Adaptionsgraf
         renderAdaptionChart(data.adaptionChart.datasets, data.adaptionChart.minDate, data.adaptionChart.maxDate);
+
+        // 5. Volym vs Muskelmassa (Tidslinje med dubbla axlar & Scatter-korrelation)
+        if (data.volumeMuscleCorrelation) {
+            renderVolumeMuscleTimelineChart(data.volumeMuscleCorrelation.timeline);
+            renderVolumeMuscleScatterChart(data.volumeMuscleCorrelation.scatter);
+        }
     } catch (err) {
         console.error("Dashboard error:", err);
     }
@@ -770,6 +789,236 @@ function renderAdaptionChart(datasets, minDate, maxDate) {
             plugins: {
                 legend: { position: 'top', labels: { color: 'white' } },
                 tooltip: { enabled: false }
+            }
+        }
+    });
+}
+
+function renderVolumeMuscleTimelineChart(timeline) {
+    const ctx = document.getElementById('volume-muscle-timeline-chart')?.getContext('2d');
+    if (!ctx || !timeline || !timeline.weeks || timeline.weeks.length === 0) return;
+
+    if (volumeMuscleTimelineChartInstance) volumeMuscleTimelineChartInstance.destroy();
+
+    const muscleVals = timeline.muscleMass.filter(v => v !== null && !isNaN(v));
+    const minMuscle = muscleVals.length > 0 ? Math.floor(Math.min(...muscleVals) - 1.5) : 50;
+    const maxMuscle = muscleVals.length > 0 ? Math.ceil(Math.max(...muscleVals) + 1.5) : 100;
+
+    const pointBgColors = timeline.isImputed.map(imp => imp ? 'rgba(160, 174, 192, 0.6)' : '#38A169');
+    const pointBorderColors = timeline.isImputed.map(imp => imp ? '#718096' : '#22543D');
+    const pointRadii = timeline.isImputed.map(imp => imp ? 2.5 : 4.5);
+
+    volumeMuscleTimelineChartInstance = new Chart(ctx, {
+        data: {
+            labels: timeline.weeks,
+            datasets: [
+                {
+                    type: 'bar',
+                    label: 'Träningsvolym (kg)',
+                    data: timeline.volume,
+                    backgroundColor: 'rgba(66, 153, 225, 0.45)',
+                    borderColor: '#4299E1',
+                    borderWidth: 1,
+                    yAxisID: 'y',
+                    order: 2
+                },
+                {
+                    type: 'line',
+                    label: 'Muskelmassa (kg)',
+                    data: timeline.muscleMass,
+                    borderColor: '#48BB78',
+                    backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                    borderWidth: 2.5,
+                    tension: 0.25,
+                    yAxisID: 'y1',
+                    pointRadius: pointRadii,
+                    pointHoverRadius: 6,
+                    pointBackgroundColor: pointBgColors,
+                    pointBorderColor: pointBorderColors,
+                    pointBorderWidth: 1.5,
+                    order: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: { color: 'white', usePointStyle: true, boxWidth: 8 }
+                },
+                tooltip: {
+                    enabled: true,
+                    callbacks: {
+                        label: (context) => {
+                            const idx = context.dataIndex;
+                            if (context.datasetIndex === 0) {
+                                return `Volym: ${Number(context.parsed.y).toLocaleString()} kg`;
+                            } else {
+                                const isImp = timeline.isImputed[idx];
+                                const label = isImp ? ' (Imputerad)' : ' (Uppmätt)';
+                                return `Muskelmassa: ${context.parsed.y} kg${label}`;
+                            }
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#A0AEC0',
+                        autoSkip: true,
+                        maxTicksLimit: 12
+                    },
+                    grid: { color: 'rgba(255,255,255,0.06)' }
+                },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'Volym (kg)',
+                        color: '#90CDF4',
+                        font: { size: 11, weight: 'bold' }
+                    },
+                    ticks: {
+                        color: 'white',
+                        callback: (val) => `${Math.round(val / 1000)}k`
+                    },
+                    grid: { color: 'rgba(255,255,255,0.06)' }
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    min: minMuscle,
+                    max: maxMuscle,
+                    title: {
+                        display: true,
+                        text: 'Muskelmassa (kg)',
+                        color: '#9AE6B4',
+                        font: { size: 11, weight: 'bold' }
+                    },
+                    ticks: {
+                        color: '#9AE6B4',
+                        callback: (val) => `${val} kg`
+                    },
+                    grid: { drawOnChartArea: false }
+                }
+            }
+        }
+    });
+}
+
+function renderVolumeMuscleScatterChart(scatter) {
+    const ctx = document.getElementById('volume-muscle-scatter-chart')?.getContext('2d');
+    const summaryEl = document.getElementById('volume-muscle-summary');
+
+    if (summaryEl && scatter?.summaryText) {
+        summaryEl.textContent = scatter.summaryText;
+    }
+
+    if (!ctx || !scatter || !scatter.points || scatter.points.length === 0) return;
+
+    if (volumeMuscleScatterChartInstance) volumeMuscleScatterChartInstance.destroy();
+
+    const measuredPoints = scatter.points.filter(p => !p.is_imputed);
+    const imputedPoints = scatter.points.filter(p => p.is_imputed);
+
+    volumeMuscleScatterChartInstance = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+            datasets: [
+                {
+                    label: 'Uppmätt mätpunkt',
+                    data: measuredPoints.map(p => ({ x: p.x, y: p.y, week: p.week })),
+                    backgroundColor: '#48BB78',
+                    borderColor: '#22543D',
+                    borderWidth: 1.5,
+                    pointRadius: 4.5,
+                    pointHoverRadius: 7
+                },
+                {
+                    label: 'Imputerad datapunkt',
+                    data: imputedPoints.map(p => ({ x: p.x, y: p.y, week: p.week })),
+                    backgroundColor: 'rgba(160, 174, 192, 0.55)',
+                    borderColor: '#4A5568',
+                    borderWidth: 1,
+                    pointRadius: 3,
+                    pointHoverRadius: 5
+                },
+                {
+                    type: 'line',
+                    label: `Regressionslinje (r = ${scatter.r})`,
+                    data: scatter.regressionLine,
+                    borderColor: '#F6AD55',
+                    backgroundColor: 'transparent',
+                    borderWidth: 2.5,
+                    pointRadius: 0,
+                    pointHoverRadius: 0,
+                    fill: false,
+                    tension: 0,
+                    borderDash: [5, 5]
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: true },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: { color: 'white', usePointStyle: true, boxWidth: 8 }
+                },
+                tooltip: {
+                    enabled: true,
+                    callbacks: {
+                        label: (context) => {
+                            if (context.dataset.type === 'line') {
+                                return `Regressionslinje: y = ${scatter.k}x + ${scatter.m}`;
+                            }
+                            const raw = context.raw;
+                            const wk = raw.week ? ` [${raw.week}]` : '';
+                            return `${context.dataset.label}${wk}: Volym ${Math.round(raw.x).toLocaleString()} kg, Muskel ${raw.y} kg`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: 'linear',
+                    position: 'bottom',
+                    title: {
+                        display: true,
+                        text: 'Total Veckovolym (kg)',
+                        color: '#90CDF4',
+                        font: { size: 11, weight: 'bold' }
+                    },
+                    ticks: {
+                        color: 'white',
+                        callback: (val) => `${Math.round(val / 1000)}k`
+                    },
+                    grid: { color: 'rgba(255,255,255,0.06)' }
+                },
+                y: {
+                    type: 'linear',
+                    title: {
+                        display: true,
+                        text: 'Muskelmassa (kg)',
+                        color: '#9AE6B4',
+                        font: { size: 11, weight: 'bold' }
+                    },
+                    ticks: {
+                        color: 'white',
+                        callback: (val) => `${val} kg`
+                    },
+                    grid: { color: 'rgba(255,255,255,0.06)' }
+                }
             }
         }
     });

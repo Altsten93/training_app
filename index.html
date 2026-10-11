@@ -218,6 +218,54 @@
                     <canvas id="sessions-chart"></canvas>
                 </div>
             </div>
+
+            <!-- Tidslinjediagram: Träningsvolym vs Muskelmassa (Dual Axis) -->
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
+                <div class="flex items-center justify-between mb-2">
+                    <div>
+                        <h2 class="text-xl sm:text-2xl font-bold text-blue-300">Volym vs Muskelmassa</h2>
+                        <p class="text-xs text-gray-400 mt-1">Veckovolym (vänster axel) och Withings muskelmassa (höger axel) över tid.</p>
+                    </div>
+                    <span class="text-xs bg-blue-900/60 text-blue-300 border border-blue-700/60 px-2.5 py-1 rounded-full font-mono">Dual-Axis</span>
+                </div>
+                <div class="chart-panel">
+                    <canvas id="volume-muscle-timeline-chart"></canvas>
+                </div>
+                <div class="flex items-center justify-center gap-4 sm:gap-6 mt-3 text-xs text-gray-400 flex-wrap">
+                    <div class="flex items-center gap-1.5">
+                        <span class="w-3 h-3 rounded-sm bg-blue-500/70 border border-blue-400 inline-block"></span>
+                        <span>Träningsvolym (kg)</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></span>
+                        <span>Uppmätt muskelmassa</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="w-2.5 h-2.5 rounded-full bg-gray-500 inline-block"></span>
+                        <span>Imputerad (linjär/trend)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Spridningsdiagram & Regressionsanalys -->
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
+                <div class="flex items-center justify-between mb-2">
+                    <div>
+                        <h2 class="text-xl sm:text-2xl font-bold text-blue-300">Korrelationsanalys (Scatter + Regression)</h2>
+                        <p class="text-xs text-gray-400 mt-1">Samband mellan veckovolym och muskelmassa med Pearsons r och regressionslinje.</p>
+                    </div>
+                    <span class="text-xs bg-purple-900/60 text-purple-300 border border-purple-700/60 px-2.5 py-1 rounded-full font-mono">Pearsons r</span>
+                </div>
+                <div class="chart-panel">
+                    <canvas id="volume-muscle-scatter-chart"></canvas>
+                </div>
+                <!-- Sammanfattande textrad -->
+                <div class="mt-4 p-3.5 bg-gray-900/90 border border-gray-700/80 rounded-xl text-center shadow-inner">
+                    <p id="volume-muscle-summary" class="text-sm font-medium text-emerald-300">
+                        Laddar korrelationsanalys...
+                    </p>
+                </div>
+            </div>
         </div>
 
         <!-- View 6: Completion Screen -->
@@ -326,6 +374,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20261004_1915"></script>
+    <script src="app.js?v=20261011_1120"></script>
 </body>
 </html>

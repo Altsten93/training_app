@@ -1,0 +1,10 @@
+{
+  "access_token": "911a39dad31a209ae49dcd07b551380882830119",
+  "refresh_token": "76f257213882d291dd406979a369f0d7e58884b9",
+  "token_type": "Bearer",
+  "userid": 34850818,
+  "scope": "user.info,user.metrics,user.activity",
+  "expires_in": 10800,
+  "expires_at": 1791720326,
+  "updated_at": "2026-10-11T09:05:26.886120+00:00"
+}

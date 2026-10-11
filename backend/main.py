@@ -20,6 +20,22 @@ try:
 except ImportError:
     from ml.engine import WorkoutDifficultyPredictor
 
+try:
+    from backend.sync_withings import sync_withings_data
+except ImportError:
+    try:
+        from sync_withings import sync_withings_data
+    except ImportError:
+        sync_withings_data = None
+
+try:
+    from backend.correlation import compute_volume_muscle_correlation
+except ImportError:
+    try:
+        from correlation import compute_volume_muscle_correlation
+    except ImportError:
+        compute_volume_muscle_correlation = None
+
 predictor = WorkoutDifficultyPredictor()
 
 load_dotenv()  # Loads variables from .env locally
@@ -911,6 +927,16 @@ async def get_dashboard(force_refresh: bool = Query(False)) -> dict[str, Any]:
                     "borderWidth": 2
                 })
 
+    # --- 5. Volym vs Muskelmassa Korrelation & Imputering ---
+    volume_muscle_correlation: dict[str, Any] = {}
+    if compute_volume_muscle_correlation:
+        try:
+            scale_resp = supabase.table("withings_scale_data").select("measured_at, muscle_mass_kg").not_.is_("muscle_mass_kg", "null").order("measured_at").execute()
+            scale_data = scale_resp.data or []
+            volume_muscle_correlation = compute_volume_muscle_correlation(workouts, scale_data)
+        except Exception as e:
+            print(f"[VARNING] Kunde inte beräkna volym/muskel-korrelation: {e}")
+
     return {
         "weeklyProgress": {
             "currentWeekVolume": current_week_total,
@@ -928,8 +954,44 @@ async def get_dashboard(force_refresh: bool = Query(False)) -> dict[str, Any]:
             "datasets": adaption_datasets,
             "minDate": adaption_window_start.strftime("%Y-%m-%d"),
             "maxDate": now.strftime("%Y-%m-%d")
-        }
+        },
+        "volumeMuscleCorrelation": volume_muscle_correlation
     }
+
+
+@app.post("/api/withings/sync")
+async def api_sync_withings() -> dict[str, Any]:
+    """Synkroniserar Withings-vågdata till Supabase vid omladdning."""
+    if not sync_withings_data:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Withings sync-modulen är inte tillgänglig.",
+        )
+    loop = asyncio.get_running_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, sync_withings_data),
+            timeout=20.0,
+        )
+        return result
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": "Withings sync tajmade ut efter 20 sekunder.", "synced_rows": 0}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "synced_rows": 0}
+
+
+@app.get("/api/stats/volume-muscle-correlation")
+async def get_volume_muscle_correlation_endpoint(force_refresh: bool = Query(False)) -> dict[str, Any]:
+    """Hämtar korrelation och imputerad tidsserie mellan träningsvolym och muskelmassa."""
+    if not compute_volume_muscle_correlation:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Korrelationsmodulen är inte tillgänglig.",
+        )
+    workouts = await fetch_workouts(force_refresh=force_refresh, user_id="Altsten93")
+    scale_resp = supabase.table("withings_scale_data").select("measured_at, muscle_mass_kg").not_.is_("muscle_mass_kg", "null").order("measured_at").execute()
+    scale_data = scale_resp.data or []
+    return compute_volume_muscle_correlation(workouts, scale_data)
 
 
 @app.post("/api/model/retrain")
