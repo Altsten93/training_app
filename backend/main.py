@@ -1007,7 +1007,13 @@ async def api_sync_withings() -> dict[str, Any]:
 
 
 @app.get("/api/stats/volume-muscle-correlation")
-async def get_volume_muscle_correlation_endpoint(force_refresh: bool = Query(False)) -> dict[str, Any]:
+async def get_volume_muscle_correlation_endpoint(
+    force_refresh: bool = Query(False),
+    include_imputed: bool = Query(False),
+    block_size: int = Query(8, ge=2, le=24),
+    step_size: int = Query(4, ge=1, le=12),
+    lag_weeks: int = Query(0, ge=0, le=8),
+) -> dict[str, Any]:
     """Hämtar korrelation och imputerad tidsserie mellan träningsvolym och muskelmassa."""
     if not compute_volume_muscle_correlation:
         raise HTTPException(
@@ -1017,7 +1023,14 @@ async def get_volume_muscle_correlation_endpoint(force_refresh: bool = Query(Fal
     workouts = await fetch_workouts(force_refresh=force_refresh, user_id="Altsten93")
     scale_resp = supabase.table("withings_scale_data").select("measured_at, muscle_mass_kg").not_.is_("muscle_mass_kg", "null").order("measured_at").execute()
     scale_data = scale_resp.data or []
-    return compute_volume_muscle_correlation(workouts, scale_data)
+    return compute_volume_muscle_correlation(
+        workouts,
+        scale_data,
+        include_imputed=include_imputed,
+        block_size=block_size,
+        step_size=step_size,
+        lag_weeks=lag_weeks,
+    )
 
 
 @app.post("/api/model/retrain")

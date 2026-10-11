@@ -43,6 +43,8 @@ let exerciseChartInstance = null;
 let intensityDifficultyChartInstance = null;
 let volumeMuscleTimelineChartInstance = null;
 let volumeMuscleScatterChartInstance = null;
+let correlationCache = null;
+let currentScatterMode = 'blocks';
 
 const donutCenterTextPlugin = {
     id: 'donutCenterText',
@@ -381,7 +383,7 @@ async function loadDashboard() {
         // 5. Volym vs Muskelmassa (Tidslinje med dubbla axlar & Scatter-korrelation)
         if (data.volumeMuscleCorrelation) {
             renderVolumeMuscleTimelineChart(data.volumeMuscleCorrelation.timeline);
-            renderVolumeMuscleScatterChart(data.volumeMuscleCorrelation.scatter);
+            renderVolumeMuscleScatterChart(data.volumeMuscleCorrelation);
         }
     } catch (err) {
         console.error("Dashboard error:", err);
@@ -961,58 +963,150 @@ function renderVolumeMuscleTimelineChart(timeline) {
     });
 }
 
-function renderVolumeMuscleScatterChart(scatter) {
+function renderVolumeMuscleScatterChart(correlationData, requestedMode) {
     const ctx = document.getElementById('volume-muscle-scatter-chart')?.getContext('2d');
     const summaryEl = document.getElementById('volume-muscle-summary');
+    const subtitleEl = document.getElementById('scatter-chart-subtitle');
+    const rBadge = document.getElementById('stat-r-badge');
+    const pBadge = document.getElementById('stat-p-badge');
+    const nBadge = document.getElementById('stat-n-badge');
+    const btnBlocks = document.getElementById('toggle-scatter-blocks');
+    const btnWeekly = document.getElementById('toggle-scatter-weekly');
 
-    if (summaryEl && scatter?.summaryText) {
-        summaryEl.textContent = scatter.summaryText;
+    if (!correlationData) return;
+    correlationCache = correlationData;
+
+    if (requestedMode) {
+        currentScatterMode = requestedMode;
     }
 
-    if (!ctx || !scatter || !scatter.points || scatter.points.length === 0) return;
+    // Bestäm vilken analys som ska visas: block eller veckovis
+    const isBlockMode = currentScatterMode === 'blocks';
+    const analysis = isBlockMode
+        ? (correlationData.blockAnalysis || correlationData.scatter)
+        : (correlationData.weeklyAnalysis || correlationData.scatter);
+
+    if (!analysis) return;
+
+    // Uppdatera toggle-knapparnas stil
+    if (btnBlocks && btnWeekly) {
+        if (isBlockMode) {
+            btnBlocks.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white shadow transition-all';
+            btnWeekly.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-all';
+        } else {
+            btnWeekly.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white shadow transition-all';
+            btnBlocks.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-all';
+        }
+    }
+
+    if (subtitleEl) {
+        subtitleEl.textContent = isBlockMode
+            ? 'Mesocykel-analys (8-veckorsblock): Genomsnittlig veckovolym vs Δ Muskelmassa med start/slut-median.'
+            : 'Veckovis analys: Veckovolym vs Uppmätt Muskelmassa (exkluderat imputerad data).';
+    }
+
+    // Uppdatera sammanfattningstext och badges
+    if (summaryEl && analysis.summaryText) {
+        summaryEl.textContent = analysis.summaryText;
+    }
+
+    if (rBadge) {
+        const rVal = analysis.r !== undefined ? analysis.r : '--';
+        rBadge.textContent = `r = ${rVal}`;
+        if (Number(rVal) >= 0.4) {
+            rBadge.className = 'px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/70 font-mono shadow-sm';
+        } else {
+            rBadge.className = 'px-2.5 py-1 rounded-lg text-xs font-bold bg-gray-800 text-gray-300 border border-gray-700 font-mono';
+        }
+    }
+    if (pBadge) {
+        const pVal = analysis.pValue !== undefined ? analysis.pValue : '--';
+        pBadge.textContent = `p = ${pVal}`;
+        if (Number(pVal) < 0.05) {
+            pBadge.className = 'px-2 py-1 rounded-lg text-xs font-mono bg-blue-950/90 text-blue-300 border border-blue-500/70 shadow-sm';
+        } else {
+            pBadge.className = 'px-2 py-1 rounded-lg text-xs font-mono bg-gray-800 text-gray-400 border border-gray-700';
+        }
+    }
+    if (nBadge) {
+        const nVal = analysis.n !== undefined ? analysis.n : '--';
+        nBadge.textContent = `n = ${nVal}`;
+    }
+
+    if (!ctx || !analysis.points || analysis.points.length === 0) return;
 
     if (volumeMuscleScatterChartInstance) volumeMuscleScatterChartInstance.destroy();
 
-    const measuredPoints = scatter.points.filter(p => !p.is_imputed);
-    const imputedPoints = scatter.points.filter(p => p.is_imputed);
+    const datasets = [];
+
+    if (isBlockMode) {
+        datasets.push({
+            type: 'scatter',
+            label: '8-veckors träningsblock',
+            data: analysis.points.map(p => ({
+                x: p.x,
+                y: p.y,
+                label: p.label,
+                startMuscle: p.startMuscle,
+                endMuscle: p.endMuscle,
+            })),
+            backgroundColor: '#48BB78',
+            borderColor: '#22543D',
+            borderWidth: 1.5,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+        });
+    } else {
+        const measured = analysis.points.filter(p => !p.is_imputed);
+        const imputed = analysis.points.filter(p => p.is_imputed);
+
+        datasets.push({
+            type: 'scatter',
+            label: 'Uppmätt mätpunkt',
+            data: measured.map(p => ({ x: p.x, y: p.y, week: p.week })),
+            backgroundColor: '#48BB78',
+            borderColor: '#22543D',
+            borderWidth: 1.5,
+            pointRadius: 4.5,
+            pointHoverRadius: 7,
+        });
+
+        if (imputed.length > 0) {
+            datasets.push({
+                type: 'scatter',
+                label: 'Imputerad punkt',
+                data: imputed.map(p => ({ x: p.x, y: p.y, week: p.week })),
+                backgroundColor: 'rgba(160, 174, 192, 0.55)',
+                borderColor: '#4A5568',
+                borderWidth: 1,
+                pointRadius: 3,
+                pointHoverRadius: 5,
+            });
+        }
+    }
+
+    if (analysis.regressionLine && analysis.regressionLine.length >= 2) {
+        datasets.push({
+            type: 'line',
+            label: `Regressionslinje (r = ${analysis.r})`,
+            data: analysis.regressionLine,
+            borderColor: '#F6AD55',
+            backgroundColor: 'transparent',
+            borderWidth: 2.5,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            fill: false,
+            tension: 0,
+            borderDash: [5, 5],
+        });
+    }
+
+    const xAxisTitle = isBlockMode ? 'Genomsnittlig Veckovolym i Blocket (kg)' : 'Total Veckovolym (kg)';
+    const yAxisTitle = isBlockMode ? 'Δ Muskelmassa (kg)' : 'Muskelmassa (kg)';
 
     volumeMuscleScatterChartInstance = new Chart(ctx, {
         type: 'scatter',
-        data: {
-            datasets: [
-                {
-                    label: 'Uppmätt mätpunkt',
-                    data: measuredPoints.map(p => ({ x: p.x, y: p.y, week: p.week })),
-                    backgroundColor: '#48BB78',
-                    borderColor: '#22543D',
-                    borderWidth: 1.5,
-                    pointRadius: 4.5,
-                    pointHoverRadius: 7
-                },
-                {
-                    label: 'Imputerad datapunkt',
-                    data: imputedPoints.map(p => ({ x: p.x, y: p.y, week: p.week })),
-                    backgroundColor: 'rgba(160, 174, 192, 0.55)',
-                    borderColor: '#4A5568',
-                    borderWidth: 1,
-                    pointRadius: 3,
-                    pointHoverRadius: 5
-                },
-                {
-                    type: 'line',
-                    label: `Regressionslinje (r = ${scatter.r})`,
-                    data: scatter.regressionLine,
-                    borderColor: '#F6AD55',
-                    backgroundColor: 'transparent',
-                    borderWidth: 2.5,
-                    pointRadius: 0,
-                    pointHoverRadius: 0,
-                    fill: false,
-                    tension: 0,
-                    borderDash: [5, 5]
-                }
-            ]
-        },
+        data: { datasets: datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
@@ -1028,11 +1122,16 @@ function renderVolumeMuscleScatterChart(scatter) {
                     callbacks: {
                         label: (context) => {
                             if (context.dataset.type === 'line') {
-                                return `Regressionslinje: y = ${scatter.k}x + ${scatter.m}`;
+                                return `Regressionslinje: y = ${analysis.k}x + ${analysis.m}`;
                             }
                             const raw = context.raw;
-                            const wk = raw.week ? ` [${raw.week}]` : '';
-                            return `${context.dataset.label}${wk}: Volym ${Math.round(raw.x).toLocaleString()} kg, Muskel ${raw.y} kg`;
+                            if (isBlockMode) {
+                                const sign = raw.y >= 0 ? '+' : '';
+                                return `${raw.label || 'Block'}: Volym ${Math.round(raw.x).toLocaleString()} kg/v, Δ Muskel ${sign}${raw.y} kg (Start: ${raw.startMuscle} kg, Slut: ${raw.endMuscle} kg)`;
+                            } else {
+                                const wk = raw.week ? ` [${raw.week}]` : '';
+                                return `${context.dataset.label}${wk}: Volym ${Math.round(raw.x).toLocaleString()} kg, Muskel ${raw.y} kg`;
+                            }
                         }
                     }
                 }
@@ -1043,7 +1142,7 @@ function renderVolumeMuscleScatterChart(scatter) {
                     position: 'bottom',
                     title: {
                         display: true,
-                        text: 'Total Veckovolym (kg)',
+                        text: xAxisTitle,
                         color: '#90CDF4',
                         font: { size: 11, weight: 'bold' }
                     },
@@ -1057,13 +1156,13 @@ function renderVolumeMuscleScatterChart(scatter) {
                     type: 'linear',
                     title: {
                         display: true,
-                        text: 'Muskelmassa (kg)',
+                        text: yAxisTitle,
                         color: '#9AE6B4',
                         font: { size: 11, weight: 'bold' }
                     },
                     ticks: {
                         color: 'white',
-                        callback: (val) => `${val} kg`
+                        callback: (val) => isBlockMode ? `${val >= 0 ? '+' : ''}${val} kg` : `${val} kg`
                     },
                     grid: { color: 'rgba(255,255,255,0.06)' }
                 }
@@ -1071,6 +1170,19 @@ function renderVolumeMuscleScatterChart(scatter) {
         }
     });
 }
+
+// Event listeners för toggle-knapparna i statistikvyn
+document.getElementById('toggle-scatter-blocks')?.addEventListener('click', () => {
+    if (correlationCache) {
+        renderVolumeMuscleScatterChart(correlationCache, 'blocks');
+    }
+});
+
+document.getElementById('toggle-scatter-weekly')?.addEventListener('click', () => {
+    if (correlationCache) {
+        renderVolumeMuscleScatterChart(correlationCache, 'weekly');
+    }
+});
 
 // --- NOTIFIKATIONER & FEL ---
 function showTempNotification(message, type = 'success') {
