@@ -36,6 +36,14 @@ except ImportError:
     except ImportError:
         compute_volume_muscle_correlation = None
 
+try:
+    from backend.multivariate import compute_multivariate_lifestyle_model
+except ImportError:
+    try:
+        from multivariate import compute_multivariate_lifestyle_model
+    except ImportError:
+        compute_multivariate_lifestyle_model = None
+
 predictor = WorkoutDifficultyPredictor()
 
 load_dotenv()  # Loads variables from .env locally
@@ -82,12 +90,36 @@ _cache: dict[str, Any] = {
 }
 _cache_lock = asyncio.Lock()
 
+_health_cache: dict[str, Any] = {
+    "data": None,
+    "timestamp": 0.0
+}
+_health_cache_lock = asyncio.Lock()
+
 # Exercise name mapping based on your tab names
 TAB_EXERCISE_MAPPING = {
     "Chest": "Bänkpress",
     "Back": "Deadlift",
     "Legs": "Squat"
 }
+
+COMPLETED_OVERRIDES: dict[tuple[str, int], dict[str, Any]] = {}
+
+def apply_overrides(df: pd.DataFrame) -> pd.DataFrame:
+    """Applicerar eventuella temporära overrides för genomförda pass på en DataFrame."""
+    df = df.copy()
+    for (w_type, row_idx), data in COMPLETED_OVERRIDES.items():
+        mask = (df["workoutType"].astype(str).str.lower() == str(w_type).lower()) & (df["originalRowIndex"] == row_idx)
+        if mask.any():
+            df.loc[mask, "is_completed"] = True
+            df.loc[mask, "Completed_workout"] = "Ja"
+            df.loc[mask, "Datum"] = data["date"]
+            df.loc[mask, "parsed_date"] = pd.to_datetime(data["date"], format="mixed", errors="coerce")
+            diff_col = f"{str(w_type).capitalize()}_difficulty"
+            if diff_col in df.columns:
+                df.loc[mask, diff_col] = data["difficulty"]
+    return df
+
 
 class TabData(BaseModel):
     headers: list[str]
@@ -539,6 +571,57 @@ async def fetch_workouts(force_refresh: bool = False, user_id: str = "Altsten93"
         return rows
 
 
+async def fetch_apple_health_data(force_refresh: bool = False) -> list[dict[str, Any]]:
+    """Hämtar daglig Apple Health-data (steg och sömn) från Supabase med caching."""
+    async with _health_cache_lock:
+        now = datetime.now(timezone.utc).timestamp()
+        cached_data = _health_cache.get("data")
+        if (
+            not force_refresh
+            and isinstance(cached_data, list)
+            and (now - float(_health_cache.get("timestamp", 0.0))) < CACHE_TTL_SECONDS
+        ):
+            return cast(list[dict[str, Any]], cached_data)
+
+        all_rows: list[dict[str, Any]] = []
+        page = 0
+        page_size = 1000
+        loop = asyncio.get_running_loop()
+
+        def _fetch_page(p: int):
+            return (
+                supabase.table("apple_health_summary_view")
+                .select("date, step_count, sleep_total_hours, sleep_deep_hours, sleep_rem_hours")
+                .not_.is_("date", "null")
+                .order("date")
+                .range(p * page_size, (p + 1) * page_size - 1)
+                .execute()
+            )
+
+        try:
+            while True:
+                resp = await loop.run_in_executor(None, _fetch_page, page)
+                batch = resp.data or []
+                all_rows.extend(batch)
+                if len(batch) < page_size:
+                    break
+                page += 1
+        except Exception as e:
+            print(f"[VARNING] Kunde inte hämta apple_health_summary_view: {e}")
+            try:
+                def _fetch_daily():
+                    return supabase.table("apple_health_daily").select("id, date, step_count, total_sleep_hours, data").execute()
+                fallback_resp = await loop.run_in_executor(None, _fetch_daily)
+                all_rows = fallback_resp.data or []
+            except Exception as e2:
+                print(f"[VARNING] Fallback till apple_health_daily misslyckades också: {e2}")
+
+        _health_cache["data"] = all_rows
+        _health_cache["timestamp"] = now
+        return all_rows
+
+
+
 def get_upcoming_sessions(workouts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Returnerar de tre närmaste oavslutade passen för varje muskelgrupp."""
     upcoming_sessions = []
@@ -953,13 +1036,26 @@ async def get_dashboard(force_refresh: bool = Query(False)) -> dict[str, Any]:
                     "borderWidth": 2
                 })
 
-    # --- 5. Volym vs Muskelmassa Korrelation & Imputering ---
+    # --- 5. Volym vs Muskelmassa Korrelation & Imputering samt Multivariat analys ---
     volume_muscle_correlation: dict[str, Any] = {}
     if compute_volume_muscle_correlation:
         try:
             scale_resp = supabase.table("withings_scale_data").select("measured_at, muscle_mass_kg").not_.is_("muscle_mass_kg", "null").order("measured_at").execute()
             scale_data = scale_resp.data or []
             volume_muscle_correlation = compute_volume_muscle_correlation(workouts, scale_data)
+
+            if compute_multivariate_lifestyle_model:
+                health_data = await fetch_apple_health_data(force_refresh=force_refresh)
+                multivariate_res = compute_multivariate_lifestyle_model(
+                    workouts=workouts,
+                    scale_data=scale_data,
+                    health_data=health_data,
+                    block_size=8,
+                    step_size=4,
+                    min_coverage=0.5,
+                    exclude_low_coverage=True,
+                )
+                volume_muscle_correlation["multivariateAnalysis"] = multivariate_res
         except Exception as e:
             print(f"[VARNING] Kunde inte beräkna volym/muskel-korrelation: {e}")
 
@@ -1023,7 +1119,7 @@ async def get_volume_muscle_correlation_endpoint(
     workouts = await fetch_workouts(force_refresh=force_refresh, user_id="Altsten93")
     scale_resp = supabase.table("withings_scale_data").select("measured_at, muscle_mass_kg").not_.is_("muscle_mass_kg", "null").order("measured_at").execute()
     scale_data = scale_resp.data or []
-    return compute_volume_muscle_correlation(
+    res = compute_volume_muscle_correlation(
         workouts,
         scale_data,
         include_imputed=include_imputed,
@@ -1031,6 +1127,59 @@ async def get_volume_muscle_correlation_endpoint(
         step_size=step_size,
         lag_weeks=lag_weeks,
     )
+    if compute_multivariate_lifestyle_model:
+        try:
+            health_data = await fetch_apple_health_data(force_refresh=force_refresh)
+            res["multivariateAnalysis"] = compute_multivariate_lifestyle_model(
+                workouts=workouts,
+                scale_data=scale_data,
+                health_data=health_data,
+                block_size=block_size,
+                step_size=step_size,
+                lag_weeks=lag_weeks,
+                include_imputed=include_imputed,
+            )
+        except Exception as e:
+            print(f"[VARNING] Kunde inte beräkna multivariat analys: {e}")
+    return res
+
+
+@app.get("/api/stats/multivariate-analysis")
+async def get_multivariate_analysis_endpoint(
+    force_refresh: bool = Query(False),
+    include_imputed: bool = Query(False),
+    block_size: int = Query(8, ge=2, le=24),
+    step_size: int = Query(4, ge=1, le=12),
+    lag_weeks: int = Query(0, ge=0, le=8),
+    min_coverage: float = Query(0.5, ge=0.0, le=1.0),
+    exclude_low_coverage: bool = Query(True),
+) -> dict[str, Any]:
+    """
+    Multivariat analys av muskeltillväxt baserat på volym, sömn och vardagssteg:
+    Delta Muskelmassa = beta_0 + beta_1 * Volym + beta_2 * Sömn + beta_3 * Vardagssteg
+    """
+    if not compute_multivariate_lifestyle_model:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Modulen för multivariat analys är inte tillgänglig.",
+        )
+    workouts = await fetch_workouts(force_refresh=force_refresh, user_id="Altsten93")
+    scale_resp = supabase.table("withings_scale_data").select("measured_at, muscle_mass_kg").not_.is_("muscle_mass_kg", "null").order("measured_at").execute()
+    scale_data = scale_resp.data or []
+    health_data = await fetch_apple_health_data(force_refresh=force_refresh)
+
+    return compute_multivariate_lifestyle_model(
+        workouts=workouts,
+        scale_data=scale_data,
+        health_data=health_data,
+        block_size=block_size,
+        step_size=step_size,
+        lag_weeks=lag_weeks,
+        min_coverage=min_coverage,
+        exclude_low_coverage=exclude_low_coverage,
+        include_imputed=include_imputed,
+    )
+
 
 
 @app.post("/api/model/retrain")

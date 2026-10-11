@@ -20,6 +20,15 @@ try:
 except ImportError:
     scipy_stats = None
 
+try:
+    from backend.multivariate import compute_multivariate_lifestyle_model
+except ImportError:
+    try:
+        from multivariate import compute_multivariate_lifestyle_model
+    except ImportError:
+        compute_multivariate_lifestyle_model = None
+
+
 
 def calculate_pearson_r_and_p(x: List[float], y: List[float]) -> Tuple[float, float]:
     """Beräkna Pearsons r och p-värde med scipy eller analytisk fallback."""

@@ -1,0 +1,268 @@
+{
+  "metrics": [
+    {
+      "data": [
+        {
+          "qty": 361.1796159999999,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "active_energy",
+      "units": "kJ"
+    },
+    {
+      "data": [
+        {
+          "qty": 10.906976744186046,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "respiratory_rate",
+      "units": "count/min"
+    },
+    {
+      "data": [
+        {
+          "qty": 2.7667956352233887,
+          "date": "2026-10-09 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "breathing_disturbances",
+      "units": "count"
+    },
+    {
+      "data": [
+        {
+          "qty": 35.425743103027344,
+          "date": "2026-10-09 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "apple_sleeping_wrist_temperature",
+      "units": "degC"
+    },
+    {
+      "data": [
+        {
+          "qty": 31,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "apple_stand_time",
+      "units": "min"
+    },
+    {
+      "data": [
+        {
+          "qty": 2,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "apple_stand_hour",
+      "units": "count"
+    },
+    {
+      "data": [
+        {
+          "qty": 96.15384615384616,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "blood_oxygen_saturation",
+      "units": "%"
+    },
+    {
+      "data": [
+        {
+          "qty": 28.277777777777786,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "iPhone"
+        }
+      ],
+      "name": "walking_double_support_percentage",
+      "units": "%"
+    },
+    {
+      "data": [
+        {
+          "qty": 3.1038461671425748,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "physical_effort",
+      "units": "kcal/hr·kg"
+    },
+    {
+      "data": [
+        {
+          "qty": 90,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "walking_heart_rate_average",
+      "units": "count/min"
+    },
+    {
+      "data": [
+        {
+          "qty": 0.7272727272727273,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "iPhone"
+        }
+      ],
+      "name": "walking_asymmetry_percentage",
+      "units": "%"
+    },
+    {
+      "data": [
+        {
+          "qty": 4.61936842105263,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "iPhone"
+        }
+      ],
+      "name": "walking_speed",
+      "units": "km/hr"
+    },
+    {
+      "data": [
+        {
+          "qty": 74.60778163210439,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "heart_rate_variability",
+      "units": "ms"
+    },
+    {
+      "data": [
+        {
+          "qty": 79.21052631578948,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "iPhone"
+        }
+      ],
+      "name": "walking_step_length",
+      "units": "cm"
+    },
+    {
+      "data": [
+        {
+          "qty": 47.34274391482394,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "environmental_audio_exposure",
+      "units": "dBASPL"
+    },
+    {
+      "data": [
+        {
+          "qty": 3.933714607960079,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel|iPhone"
+        },
+        {
+          "qty": 0.3049547504708171,
+          "date": "2026-10-11 00:00:00 +0200",
+          "source": "Apple Watch för Daniel|iPhone"
+        }
+      ],
+      "name": "walking_running_distance",
+      "units": "km"
+    },
+    {
+      "data": [
+        {
+          "Avg": 56.24122001851324,
+          "Max": 102,
+          "Min": 47,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "heart_rate",
+      "units": "count/min"
+    },
+    {
+      "data": [
+        {
+          "qty": 4542,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel|iPhone"
+        },
+        {
+          "qty": 368,
+          "date": "2026-10-11 00:00:00 +0200",
+          "source": "Apple Watch för Daniel|iPhone"
+        }
+      ],
+      "name": "step_count",
+      "units": "count"
+    },
+    {
+      "data": [
+        {
+          "rem": 2.761343433360259,
+          "core": 4.087793312105868,
+          "date": "2026-10-10 00:00:00 +0200",
+          "deep": 0.5589493255813915,
+          "awake": 0.7925373558534516,
+          "inBed": 0,
+          "asleep": 0,
+          "source": "Apple Watch för Daniel",
+          "inBedEnd": "2026-10-10 07:22:57 +0200",
+          "sleepEnd": "2026-10-10 07:22:57 +0200",
+          "inBedStart": "2026-10-09 23:10:55 +0200",
+          "sleepStart": "2026-10-09 23:10:55 +0200",
+          "totalSleep": 7.408086071047518
+        }
+      ],
+      "name": "sleep_analysis",
+      "units": "hr"
+    },
+    {
+      "data": [
+        {
+          "qty": 12,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "iPhone"
+        }
+      ],
+      "name": "flights_climbed",
+      "units": "count"
+    },
+    {
+      "data": [
+        {
+          "qty": 3390.023239999998,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "basal_energy_burned",
+      "units": "kJ"
+    },
+    {
+      "data": [
+        {
+          "qty": 54,
+          "date": "2026-10-10 00:00:00 +0200",
+          "source": "Apple Watch för Daniel"
+        }
+      ],
+      "name": "resting_heart_rate",
+      "units": "count/min"
+    }
+  ]
+}

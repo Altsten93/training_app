@@ -73,7 +73,63 @@ const donutCenterTextPlugin = {
     }
 };
 
+const forestPlotPlugin = {
+    id: 'forestPlotPlugin',
+    afterDatasetsDraw(chart) {
+        if (chart.config.type !== 'bar' || chart.config.options?.indexAxis !== 'y') return;
+        const { ctx, scales: { x, y } } = chart;
+        const meta = chart.getDatasetMeta(0);
+        if (!meta || !meta.data || !x || !y) return;
+
+        const ciLows = chart.config.data?.datasets?.[0]?._ciLow || [];
+        const ciHighs = chart.config.data?.datasets?.[0]?._ciHigh || [];
+
+        ctx.save();
+
+        meta.data.forEach((bar, index) => {
+            const ciLow = ciLows[index];
+            const ciHigh = ciHighs[index];
+            if (ciLow === undefined || ciHigh === undefined || isNaN(ciLow) || isNaN(ciHigh)) return;
+
+            const yPos = bar.y;
+            const xLow = x.getPixelForValue(ciLow);
+            const xHigh = x.getPixelForValue(ciHigh);
+
+            // Horisontell konfidensintervall-linje (vit/ljusgrå)
+            ctx.strokeStyle = '#F7FAFC';
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(xLow, yPos);
+            ctx.lineTo(xHigh, yPos);
+            ctx.stroke();
+
+            // Vänster och höger whisker (ändmarkörer)
+            const whiskerHalfHeight = 6;
+            ctx.beginPath();
+            ctx.moveTo(xLow, yPos - whiskerHalfHeight);
+            ctx.lineTo(xLow, yPos + whiskerHalfHeight);
+            ctx.moveTo(xHigh, yPos - whiskerHalfHeight);
+            ctx.lineTo(xHigh, yPos + whiskerHalfHeight);
+            ctx.stroke();
+        });
+
+        // Vertikal noll-linje som referens
+        const zeroX = x.getPixelForValue(0);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(zeroX, y.top);
+        ctx.lineTo(zeroX, y.bottom);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+};
+
 Chart.register(donutCenterTextPlugin);
+Chart.register(forestPlotPlugin);
 
 // --- INITIALISERING & EVENT LISTENERS ---
 document.addEventListener('DOMContentLoaded', async () => {
@@ -963,15 +1019,19 @@ function renderVolumeMuscleTimelineChart(timeline) {
     });
 }
 
-function renderVolumeMuscleScatterChart(correlationData, requestedMode) {
+async function renderVolumeMuscleScatterChart(correlationData, requestedMode) {
     const ctx = document.getElementById('volume-muscle-scatter-chart')?.getContext('2d');
+    const titleEl = document.getElementById('correlation-card-title');
     const summaryEl = document.getElementById('volume-muscle-summary');
     const subtitleEl = document.getElementById('scatter-chart-subtitle');
     const rBadge = document.getElementById('stat-r-badge');
+    const r2AdjBadge = document.getElementById('stat-r2-adj-badge');
     const pBadge = document.getElementById('stat-p-badge');
     const nBadge = document.getElementById('stat-n-badge');
     const btnBlocks = document.getElementById('toggle-scatter-blocks');
     const btnWeekly = document.getElementById('toggle-scatter-weekly');
+    const btnMulti = document.getElementById('toggle-scatter-multivariate');
+    const detailsPanel = document.getElementById('multivariate-details-panel');
 
     if (!correlationData) return;
     correlationCache = correlationData;
@@ -980,8 +1040,246 @@ function renderVolumeMuscleScatterChart(correlationData, requestedMode) {
         currentScatterMode = requestedMode;
     }
 
-    // Bestäm vilken analys som ska visas: block eller veckovis
+    const isMultiMode = currentScatterMode === 'multivariate';
     const isBlockMode = currentScatterMode === 'blocks';
+
+    // 1. Uppdatera toggle-knapparnas stil
+    const activeBtnClass = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white shadow transition-all';
+    const inactiveBtnClass = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-all';
+
+    if (btnBlocks) btnBlocks.className = isBlockMode ? activeBtnClass : inactiveBtnClass;
+    if (btnWeekly) btnWeekly.className = (currentScatterMode === 'weekly') ? activeBtnClass : inactiveBtnClass;
+    if (btnMulti) btnMulti.className = isMultiMode ? activeBtnClass : inactiveBtnClass;
+
+    // 2. Multivariat läge (Livsstil)
+    if (isMultiMode) {
+        let multiData = correlationData.multivariateAnalysis;
+        if (!multiData) {
+            try {
+                if (summaryEl) summaryEl.textContent = 'Hämtar multivariat regressionsmodell...';
+                const resp = await apiFetch('/api/stats/multivariate-analysis');
+                if (resp.ok) {
+                    multiData = await resp.json();
+                    correlationData.multivariateAnalysis = multiData;
+                }
+            } catch (err) {
+                console.error('Kunde inte hämta multivariat analys:', err);
+            }
+        }
+
+        if (!multiData) {
+            if (summaryEl) summaryEl.textContent = 'Kunde inte läsa in multivariat regressionsdata.';
+            return;
+        }
+
+        if (titleEl) titleEl.textContent = 'Multivariat analys: Volym, Sömn & Steg vs Muskeltillväxt';
+        if (subtitleEl) subtitleEl.textContent = 'Multipel linjär regression (OLS): Relativ påverkan (standardiserade β-koefficienter) med 95 % konfidensintervall.';
+        if (summaryEl && multiData.summary_text) summaryEl.textContent = multiData.summary_text;
+
+        // KPI-badges
+        if (rBadge) {
+            rBadge.textContent = `R² = ${multiData.r2 !== undefined ? multiData.r2 : '--'}`;
+            rBadge.className = Number(multiData.r2) >= 0.4
+                ? 'px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/70 font-mono shadow-sm'
+                : 'px-2.5 py-1 rounded-lg text-xs font-bold bg-gray-800 text-gray-300 border border-gray-700 font-mono';
+        }
+        if (r2AdjBadge) {
+            r2AdjBadge.classList.remove('hidden');
+            r2AdjBadge.textContent = `R²_adj = ${multiData.r2_adjusted !== undefined ? multiData.r2_adjusted : '--'}`;
+        }
+        if (pBadge) {
+            const pVal = multiData.model_p_value !== undefined ? multiData.model_p_value : '--';
+            pBadge.textContent = `Modell-p = ${pVal}`;
+            pBadge.className = Number(pVal) < 0.05
+                ? 'px-2 py-1 rounded-lg text-xs font-mono bg-blue-950/90 text-blue-300 border border-blue-500/70 shadow-sm'
+                : 'px-2 py-1 rounded-lg text-xs font-mono bg-gray-800 text-gray-400 border border-gray-700';
+        }
+        if (nBadge) {
+            nBadge.textContent = `n = ${multiData.n_blocks || 0} block`;
+        }
+
+        // Rendera detaljtabell under grafen
+        if (detailsPanel && multiData.coefficients) {
+            detailsPanel.classList.remove('hidden');
+            const coeffs = multiData.coefficients;
+            const predKeys = ['volume', 'sleep_hours', 'daily_steps'];
+            const predIcons = { volume: '🏋️', sleep_hours: '😴', daily_steps: '👟' };
+
+            detailsPanel.innerHTML = `
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs font-mono">
+                        <thead>
+                            <tr class="text-gray-400 border-b border-gray-700">
+                                <th class="pb-2">Variabel</th>
+                                <th class="pb-2 text-right">Standardiserad β</th>
+                                <th class="pb-2 text-right">95% Konfidensintervall</th>
+                                <th class="pb-2 text-right">Rå koefficient</th>
+                                <th class="pb-2 text-right">P-värde</th>
+                                <th class="pb-2 text-right">Multikollinearitet (VIF)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-800">
+                            ${predKeys.map(key => {
+                                const c = coeffs[key] || {};
+                                const icon = predIcons[key] || '📊';
+                                const betaSign = (c.standardized_beta || 0) >= 0 ? '+' : '';
+                                const isSig = c.significant;
+                                const sigBadge = isSig
+                                    ? '<span class="text-emerald-400 font-bold">p < 0.05 *</span>'
+                                    : `<span class="text-gray-400">p = ${c.p_value}</span>`;
+                                return `
+                                    <tr>
+                                        <td class="py-2.5 font-sans font-semibold text-white flex items-center gap-1.5">
+                                            <span>${icon}</span> <span>${escapeHtml(c.name || key)}</span>
+                                            <span class="text-[10px] text-gray-400 font-mono">(${escapeHtml(c.unit || '')})</span>
+                                        </td>
+                                        <td class="py-2.5 text-right font-bold ${c.standardized_beta >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                                            ${betaSign}${c.standardized_beta ?? '--'}
+                                        </td>
+                                        <td class="py-2.5 text-right text-gray-300">
+                                            [${c.std_ci_lower ?? '--'}, ${c.std_ci_upper ?? '--'}]
+                                        </td>
+                                        <td class="py-2.5 text-right text-gray-300">
+                                            ${c.raw !== undefined ? c.raw : '--'}
+                                        </td>
+                                        <td class="py-2.5 text-right">
+                                            ${sigBadge}
+                                        </td>
+                                        <td class="py-2.5 text-right ${c.vif < 5 ? 'text-gray-300' : 'text-amber-400'}">
+                                            ${c.vif ?? 1.0}
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        if (!ctx) return;
+        if (volumeMuscleScatterChartInstance) volumeMuscleScatterChartInstance.destroy();
+
+        const coeffs = multiData.coefficients || {};
+        const orderedKeys = ['volume', 'sleep_hours', 'daily_steps'];
+        const labels = orderedKeys.map(k => coeffs[k]?.name || k);
+        const betaValues = orderedKeys.map(k => coeffs[k]?.standardized_beta ?? 0);
+        const ciLows = orderedKeys.map(k => coeffs[k]?.std_ci_lower ?? 0);
+        const ciHighs = orderedKeys.map(k => coeffs[k]?.std_ci_upper ?? 0);
+
+        const bgColors = orderedKeys.map(k => {
+            const item = coeffs[k] || {};
+            const beta = item.standardized_beta || 0;
+            const sig = item.significant;
+            if (sig) {
+                return beta >= 0 ? 'rgba(16, 185, 129, 0.85)' : 'rgba(239, 68, 68, 0.85)';
+            } else {
+                return beta >= 0 ? 'rgba(59, 130, 246, 0.75)' : 'rgba(249, 115, 22, 0.75)';
+            }
+        });
+
+        const borderColors = orderedKeys.map(k => {
+            const item = coeffs[k] || {};
+            const beta = item.standardized_beta || 0;
+            const sig = item.significant;
+            if (sig) {
+                return beta >= 0 ? '#10B981' : '#EF4444';
+            } else {
+                return beta >= 0 ? '#3B82F6' : '#F97316';
+            }
+        });
+
+        const allCiVals = [...ciLows, ...ciHighs, ...betaValues, 0];
+        const minVal = Math.min(...allCiVals);
+        const maxVal = Math.max(...allCiVals);
+        const absMax = Math.max(Math.abs(minVal), Math.abs(maxVal), 0.5);
+        const suggestedBound = Math.ceil(absMax * 1.25 * 10) / 10;
+
+        volumeMuscleScatterChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Standardiserad koefficient (β)',
+                    data: betaValues,
+                    backgroundColor: bgColors,
+                    borderColor: borderColors,
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                    barThickness: 26,
+                    _ciLow: ciLows,
+                    _ciHigh: ciHighs,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: {
+                    padding: { left: 8, right: 16, top: 8, bottom: 4 }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: { color: 'white', usePointStyle: true, boxWidth: 8 }
+                    },
+                    tooltip: {
+                        enabled: true,
+                        callbacks: {
+                            label: (context) => {
+                                const idx = context.dataIndex;
+                                const key = orderedKeys[idx];
+                                const item = coeffs[key] || {};
+                                const sign = (item.standardized_beta || 0) >= 0 ? '+' : '';
+                                return [
+                                    `Standardiserad β: ${sign}${item.standardized_beta}`,
+                                    `Rå koefficient: ${item.raw} ${item.unit || ''}`,
+                                    `95% CI: [${item.std_ci_lower}, ${item.std_ci_upper}]`,
+                                    `P-värde: p = ${item.p_value} (${item.significant ? 'Signifikant *' : 'Ej signifikant'})`,
+                                    `Multikollinearitet (VIF): ${item.vif}`
+                                ];
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        suggestedMin: -suggestedBound,
+                        suggestedMax: suggestedBound,
+                        title: {
+                            display: true,
+                            text: 'Relativ effekt / Standardiserad koefficient (β-vikt ± 95% CI)',
+                            color: '#90CDF4',
+                            font: { size: 11, weight: 'bold' }
+                        },
+                        ticks: {
+                            color: 'white',
+                            callback: (v) => `${v > 0 ? '+' : ''}${v}`
+                        },
+                        grid: { color: 'rgba(255, 255, 255, 0.08)' }
+                    },
+                    y: {
+                        ticks: {
+                            color: 'white',
+                            font: { size: 12, weight: '600' }
+                        },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+        return;
+    }
+
+    // 3. Block- eller veckovis scatter-vy
+    if (r2AdjBadge) r2AdjBadge.classList.add('hidden');
+    if (detailsPanel) {
+        detailsPanel.classList.add('hidden');
+        detailsPanel.innerHTML = '';
+    }
+    if (titleEl) titleEl.textContent = 'Korrelation: Volym vs Muskelmassa';
+
     const analysis = isBlockMode
         ? (correlationData.blockAnalysis || correlationData.scatter)
         : (correlationData.weeklyAnalysis || correlationData.scatter);
@@ -1181,6 +1479,12 @@ document.getElementById('toggle-scatter-blocks')?.addEventListener('click', () =
 document.getElementById('toggle-scatter-weekly')?.addEventListener('click', () => {
     if (correlationCache) {
         renderVolumeMuscleScatterChart(correlationCache, 'weekly');
+    }
+});
+
+document.getElementById('toggle-scatter-multivariate')?.addEventListener('click', () => {
+    if (correlationCache) {
+        renderVolumeMuscleScatterChart(correlationCache, 'multivariate');
     }
 });
 

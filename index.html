@@ -251,31 +251,37 @@
             <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700 mt-8">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
                     <div>
-                        <h2 class="text-xl sm:text-2xl font-bold text-blue-300">Korrelation: Volym vs Muskelmassa</h2>
+                        <h2 id="correlation-card-title" class="text-xl sm:text-2xl font-bold text-blue-300">Korrelation: Volym vs Muskelmassa</h2>
                         <p id="scatter-chart-subtitle" class="text-xs text-gray-400 mt-1">
                             Mesocykel-analys (8-veckorsblock): Genomsnittlig veckovolym vs Δ Muskelmassa med start/slut-median.
                         </p>
                     </div>
-                    <div class="flex items-center gap-2 flex-wrap">
+                    <div id="scatter-badges-container" class="flex items-center gap-2 flex-wrap">
                         <span id="stat-r-badge" class="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 font-mono">r = --</span>
+                        <span id="stat-r2-adj-badge" class="hidden px-2.5 py-1 rounded-lg text-xs font-bold bg-purple-950/80 text-purple-300 border border-purple-700/60 font-mono">R²_adj = --</span>
                         <span id="stat-p-badge" class="px-2 py-1 rounded-lg text-xs font-mono bg-blue-950/80 text-blue-300 border border-blue-700/60">p = --</span>
                         <span id="stat-n-badge" class="px-2 py-1 rounded-lg text-xs font-mono bg-gray-700/80 text-gray-300 border border-gray-600">n = --</span>
                     </div>
                 </div>
 
-                <!-- Toggle mellan Mesocykel-block och Veckovisa mätpunkter -->
-                <div class="flex items-center gap-2 mb-4">
+                <!-- Toggle mellan Mesocykel-block, Veckovisa mätpunkter och Multivariat analys -->
+                <div class="flex items-center gap-2 mb-4 flex-wrap">
                     <button id="toggle-scatter-blocks" type="button" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white shadow transition-all">
                         8-veckors Block (Mesocykel)
                     </button>
                     <button id="toggle-scatter-weekly" type="button" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-all">
                         Faktiska Mätveckor
                     </button>
+                    <button id="toggle-scatter-multivariate" type="button" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-all">
+                        Multivariat (Livsstil)
+                    </button>
                 </div>
 
                 <div class="chart-panel">
                     <canvas id="volume-muscle-scatter-chart"></canvas>
                 </div>
+                <!-- Detaljpanel för multivariat analys (visas enbart i multivariat läge) -->
+                <div id="multivariate-details-panel" class="hidden mt-4 pt-3 border-t border-gray-700/80"></div>
                 <!-- Sammanfattande textrad -->
                 <div class="mt-4 p-3.5 bg-gray-900/90 border border-gray-700/80 rounded-xl text-center shadow-inner">
                     <p id="volume-muscle-summary" class="text-sm font-medium text-emerald-300">
