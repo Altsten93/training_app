@@ -102,3 +102,75 @@ def test_get_upcoming_sessions_returns_first_three_uncompleted_per_category():
     assert [session['name'] for session in chest_sessions] == ['Bench 2', 'Bench 3', 'Bench 4']
     assert len(back_sessions) == 1
     assert legs_sessions == []
+
+
+def test_sync_sheet_updates_do_not_include_one_rm(monkeypatch):
+    import asyncio
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    monkeypatch.setenv('SUPABASE_URL', 'https://example.supabase.co')
+    monkeypatch.setenv('SUPABASE_SERVICE_ROLE_KEY', 'test-key')
+    backend_dir = str(Path(__file__).resolve().parent)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    import main
+
+    row = {
+        'user_id': 'Altsten93',
+        'category': 'Chest',
+        'row_index': 2,
+        'exercise': 'Bänkpress',
+        'completed': True,
+        'workout_date': '2026-01-01',
+        'weight_kg': 80,
+        'reps': 5,
+        'sets': 4,
+        'volume': 1600,
+        'intensity': 0.7,
+        'difficulty': 7,
+        'one_rm': 100,
+        'ml_predicted_difficulty': 6,
+    }
+
+    class FakeQuery:
+        def __init__(self, database):
+            self.database = database
+            self.upsert_rows = None
+
+        def select(self, _columns):
+            return self
+
+        def eq(self, _column, _value):
+            return self
+
+        def upsert(self, rows, on_conflict):
+            self.upsert_rows = rows
+            return self
+
+        def execute(self):
+            if self.upsert_rows:
+                self.database.row.update(self.upsert_rows[0])
+            return SimpleNamespace(data=[self.database.row.copy()])
+
+    class FakeDatabase:
+        def __init__(self):
+            self.row = row.copy()
+
+        def table(self, _name):
+            return FakeQuery(self)
+
+    monkeypatch.setattr(main, 'supabase', FakeDatabase())
+    payload = main.SyncPayload(
+        user_id='Altsten93',
+        tabs={'Chest': main.TabData(
+            headers=[],
+            rows=[['', 'Nej', 80, 5, 4, 1600, 0.7, 7, 105, 6]],
+        )},
+    )
+
+    result = asyncio.run(main.sync_sheet_data(payload, authorization='******'))
+
+    assert result['updates']['Chest'][0]['completed'] == 'Ja'
+    assert 'one_rm' not in result['updates']['Chest'][0]

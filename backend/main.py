@@ -416,8 +416,6 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
         raw_diff = r.get("difficulty")
         raw_ml = r.get("ml_predicted_difficulty")
         raw_wdate = r.get("workout_date")
-        raw_1rm = r.get("one_rm")
-
         valid_difficulty = (
             round(float(raw_diff))
             if (raw_diff is not None and float(raw_diff) > 0)
@@ -428,12 +426,6 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
             if (raw_ml is not None and float(raw_ml) > 0)
             else None
         )
-        valid_1rm = (
-            round(float(raw_1rm), 2)
-            if (raw_1rm is not None and float(raw_1rm) > 0)
-            else None
-        )
-
         date_str = None
         if raw_wdate:
             try:
@@ -460,8 +452,6 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 update_item["date"] = date_str
             if valid_difficulty is not None:
                 update_item["difficulty"] = valid_difficulty
-            if valid_1rm is not None:
-                update_item["one_rm"] = valid_1rm
             if valid_ml is not None:
                 update_item["ml_difficulty"] = valid_ml
             updates[cat].append(update_item)
@@ -473,8 +463,6 @@ async def sync_sheet_data(payload: SyncPayload, authorization: str | None = Head
                 "completed": "Nej",
                 "ml_difficulty": valid_ml,
             }
-            if valid_1rm is not None:
-                update_item["one_rm"] = valid_1rm
             updates[cat].append(update_item)
 
     for items in updates.values():
@@ -632,7 +620,6 @@ async def notify_google_sheets(
     row_index: int,
     date_str: str,
     difficulty: int,
-    one_rm: float | None,
 ) -> None:
     """Pushar avklarat pass i realtid till Google Sheets via Webhook Web App."""
     if not GOOGLE_SHEETS_WEBHOOK_URL:
@@ -665,7 +652,6 @@ async def notify_google_sheets(
                 "rowIndex": row_index,
                 "date": formatted_date,
                 "difficulty": difficulty,
-                "one_rm": one_rm,
             }
             with suppress(Exception):
                 resp = await client.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload)
@@ -778,7 +764,6 @@ async def complete_workout(
             row_index=row_index,
             date_str=date_val,
             difficulty=difficulty_val,
-            one_rm=calculated_one_rm,
         )
 
     return {"status": "success", "message": "Workout completed successfully"}
